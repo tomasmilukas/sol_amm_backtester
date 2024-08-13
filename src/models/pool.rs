@@ -1,40 +1,41 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct Pool {
+#[derive(Debug, FromRow, Serialize, Deserialize)]
+pub struct PoolModel {
     pub address: String,
     pub name: String,
     pub token_a_name: String,
     pub token_b_name: String,
     pub token_a_address: String,
     pub token_b_address: String,
-    pub token_a_decimals: i32,
-    pub token_b_decimals: i32,
-    pub tick_spacing: i32,
-    pub fee_rate: i32,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_updated_at: chrono::DateTime<chrono::Utc>,
+    pub token_a_decimals: i16,
+    pub token_b_decimals: i16,
+    pub tick_spacing: i16,
+    pub fee_rate: i16,
+    pub created_at: DateTime<Utc>,
+    pub last_updated_at: DateTime<Utc>,
 }
 
-impl Pool {
+impl PoolModel {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         address: String,
-        name: String,
+        token_a_name: String,
+        token_b_name: String,
         token_a_address: String,
         token_b_address: String,
-        token_a_decimals: i32,
-        token_b_decimals: i32,
-        tick_spacing: i32,
-        fee_rate: i32,
+        token_a_decimals: i16,
+        token_b_decimals: i16,
+        tick_spacing: i16,
+        fee_rate: i16,
     ) -> Self {
-        let pool_name_split: Vec<&str> = pair.split('/').collect();
-
         Self {
             address,
-            name,
-            token_a_name: pool_name_split[0],
-            token_b_name: pool_name_split[1],
+            name: token_a_name.to_owned() + "/" + &token_b_name.to_owned(),
+            token_a_name,
+            token_b_name,
             token_a_address,
             token_b_address,
             token_a_decimals,
