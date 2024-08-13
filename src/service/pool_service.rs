@@ -1,77 +1,98 @@
-use crate::models::Pool;
-use crate::repositories::PoolRepository;
+use crate::api::pool_api::PoolApi;
+use crate::models::pool::PoolModel;
+use crate::repositories::pool_repo::PoolRepo;
+use crate::utils::decode::{decode_whirlpool, Pubkey};
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose, Engine as _};
+
+// Copied from Orcas source program
+#[derive(Debug)]
+pub struct Whirlpool {
+    pub whirlpools_config: Pubkey,
+    pub whirlpool_bump: [u8; 1],
+    pub tick_spacing: u16,
+    pub tick_spacing_seed: [u8; 2],
+    pub fee_rate: u16,
+    pub protocol_fee_rate: u16,
+    pub liquidity: u128,
+    pub sqrt_price: u128,
+    pub tick_current_index: i32,
+    pub protocol_fee_owed_a: u64,
+    pub protocol_fee_owed_b: u64,
+    pub token_mint_a: Pubkey,
+    pub token_vault_a: Pubkey,
+    pub fee_growth_global_a: u128,
+    pub token_mint_b: Pubkey,
+    pub token_vault_b: Pubkey,
+    pub fee_growth_global_b: u128,
+}
 
 pub struct PoolService {
-    repo: PoolRepository,
+    repo: PoolRepo,
+    api: PoolApi,
 }
 
 impl PoolService {
-    pub fn new(repo: PoolRepository) -> Self {
-        Self { repo }
+    pub fn new(repo: PoolRepo, api: PoolApi) -> Self {
+        Self { repo, api }
     }
 
-    pub async fn fetch_and_store_pool_data(&self) -> Result<(), Error> {
-        // Fetch data from API
-        let raw_data = self.fetch_pool_data().await?;
-        
-        // Parse the data
-        let pool = self.parse_pool_data(raw_data)?;
-        
-        // Store in repository
+    pub async fn fetch_and_store_pool_data(&self, pool_address: &str) -> Result<()> {
+        let whirlpool = self.fetch_and_decode_pool_data(pool_address).await?;
+
+        let pool = self
+            .convert_whirlpool_to_pool(pool_address.to_string(), whirlpool)
+            .await?;
+
         self.repo.insert(&pool).await?;
-        
+
         Ok(())
     }
 
-    pub async fn fetch_and_decode_pool_data(&self, pool_address: &str) -> Result<WhirlpoolData, Box<dyn std::error::Error>> {
-        let account_info = pool_api::fetch_pool_data(pool_address).await?;
-        
-        // Extract the base64 data from the account_info
-        let base64_data = account_info["value"]["data"][0].as_str()
-            .ok_or("Failed to extract base64 data")?;
+    pub async fn fetch_and_decode_pool_data(&self, pool_address: &str) -> Result<Whirlpool> {
+        let result = self.api.fetch_pool_data(pool_address).await?;
 
-        // Decode the data
-        self.decode_whirlpool_data(base64_data)
+        let whirlpool = result
+            .get("value")
+            .and_then(|value| value.get("data"))
+            .and_then(|account_info| account_info[0].as_str())
+            .map(|base64_data| general_purpose::STANDARD.decode(base64_data))
+            .transpose()
+            .context("Failed to decode base64 data")?
+            .map(|decoded| decode_whirlpool(&decoded))
+            .transpose()
+            .context("Failed to decode whirlpool data")?
+            .ok_or_else(|| anyhow::anyhow!("No valid pool data found"))?;
+
+        Ok(whirlpool)
     }
 
-    fn decode_whirlpool_data(&self, base64_data: &str) -> Result<WhirlpoolData, Box<dyn std::error::Error>> {
-        let decoded = general_purpose::STANDARD.decode(base64_data)?;
-        let mut rdr = Cursor::new(decoded);
+    async fn convert_whirlpool_to_pool(
+        &self,
+        pool_address: String,
+        whirlpool: Whirlpool,
+    ) -> Result<PoolModel> {
+        let token_a_address = whirlpool.token_mint_a.to_string();
+        let token_b_address = whirlpool.token_mint_b.to_string();
 
-        // Skip the anchor discriminator (8 bytes)
-        rdr.set_position(8);
+        let token_a_metadata = self.api.fetch_token_metadata(&token_a_address).await?;
+        let token_b_metadata = self.api.fetch_token_metadata(&token_b_address).await?;
 
-        let mut token_mint_a = [0u8; 32];
-        rdr.read_exact(&mut token_mint_a)?;
+        let tick_spacing = whirlpool.tick_spacing;
+        let fee_rate = whirlpool.fee_rate;
 
-        let mut token_mint_b = [0u8; 32];
-        rdr.read_exact(&mut token_mint_b)?;
+        let pool = PoolModel::new(
+            pool_address,
+            token_a_metadata.symbol,
+            token_b_metadata.symbol,
+            token_a_address,
+            token_b_address,
+            token_a_metadata.decimals as i16,
+            token_b_metadata.decimals as i16,
+            tick_spacing as i16,
+            fee_rate as i16,
+        );
 
-        let tick_spacing = rdr.read_u16::<LittleEndian>()?;
-        
-        let mut tick_spacing_seed = [0u8; 2];
-        rdr.read_exact(&mut tick_spacing_seed)?;
-
-        let fee_rate = rdr.read_u16::<LittleEndian>()?;
-        let protocol_fee_rate = rdr.read_u16::<LittleEndian>()?;
-        let liquidity = rdr.read_u128::<LittleEndian>()?;
-        let sqrt_price = rdr.read_u128::<LittleEndian>()?;
-        let tick_current_index = rdr.read_i32::<LittleEndian>()?;
-        let protocol_fee_owed_a = rdr.read_u64::<LittleEndian>()?;
-        let protocol_fee_owed_b = rdr.read_u64::<LittleEndian>()?;
-
-        Ok(WhirlpoolData {
-            token_mint_a,
-            token_mint_b,
-            tick_spacing,
-            tick_spacing_seed,
-            fee_rate,
-            protocol_fee_rate,
-            liquidity,
-            sqrt_price,
-            tick_current_index,
-            protocol_fee_owed_a,
-            protocol_fee_owed_b,
-        })
+        Ok(pool)
     }
 }
