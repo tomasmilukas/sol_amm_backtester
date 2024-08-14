@@ -13,7 +13,7 @@ impl PoolRepo {
     pub async fn insert(&self, pool: &PoolModel) -> Result<(), sqlx::Error> {
         query(
             "INSERT INTO pools (address, name, token_a_name, token_b_name, token_a_address, token_b_address, token_a_decimals, token_b_decimals, tick_spacing, fee_rate, created_at, last_updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
         )
         .bind(&pool.address)
         .bind(&pool.name)

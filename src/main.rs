@@ -1,14 +1,15 @@
 mod api;
 mod backtester;
 mod config;
-mod models;
 mod db;
+mod models;
 mod repositories;
 mod service;
 mod utils;
 
 use crate::config::Config;
 use api::pool_api::PoolApi;
+use db::initialize_amm_backtester_database;
 use dotenv::dotenv;
 use repositories::pool_repo::PoolRepo;
 use service::pool_service::PoolService;
@@ -35,6 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
+
+    initialize_amm_backtester_database(&pool).await?;
 
     let pool_repo = PoolRepo::new(pool);
     let pool_api = PoolApi::new()?;
