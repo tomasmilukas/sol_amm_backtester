@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 
+use crate::models::token_metadata::TokenMetadata;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ApiResponse {
     pub jsonrpc: String,
@@ -15,15 +17,9 @@ pub struct PoolApi {
     client: reqwest::Client,
     coingecko_api_key: String,
     coingecko_api_url: String,
+    coingecko_header: String,
     alchemy_api_key: String,
     alchemy_api_url: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TokenMetadata {
-    pub name: String,
-    pub symbol: String,
-    pub decimals: i64,
 }
 
 impl PoolApi {
@@ -33,6 +29,8 @@ impl PoolApi {
             env::var("COINGECKO_API_KEY").context("COINGECKO_API_KEY must be set")?;
         let coingecko_api_url =
             env::var("COINGECKO_API_URL").context("COINGECKO_API_URL must be set")?;
+        let coingecko_header =
+            env::var("COINGECKO_HEADER").context("COINGECKO_HEADER must be set")?;
         let alchemy_api_key = env::var("ALCHEMY_API_KEY").context("ALCHEMY_API_KEY must be set")?;
         let alchemy_api_url = env::var("ALCHEMY_API_URL").context("ALCHEMY_API_URL must be set")?;
 
@@ -40,6 +38,7 @@ impl PoolApi {
             client: reqwest::Client::new(),
             coingecko_api_key,
             coingecko_api_url,
+            coingecko_header,
             alchemy_api_key,
             alchemy_api_url,
         })
@@ -80,7 +79,7 @@ impl PoolApi {
         let response = self
             .client
             .get(&url)
-            .header("x-cg-api-key", &self.coingecko_api_key)
+            .header(&self.coingecko_header, &self.coingecko_api_key)
             .send()
             .await
             .context("Failed to send request to CoinGecko")?;
@@ -94,8 +93,7 @@ impl PoolApi {
 
         let json_response: Value = response.json().await?;
 
-        let token_info: TokenMetadata = TokenMetadata {
-            name: json_response["name"].to_string(),
+        let token_info = TokenMetadata {
             symbol: json_response["symbol"].to_string(),
             decimals: json_response["detail_platforms"]["solana"]["decimal_place"]
                 .as_i64()

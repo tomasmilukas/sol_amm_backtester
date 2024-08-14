@@ -1,13 +1,11 @@
 mod api;
 mod backtester;
-mod config;
 mod db;
 mod models;
 mod repositories;
 mod service;
 mod utils;
 
-use crate::config::Config;
 use api::pool_api::PoolApi;
 use db::initialize_amm_backtester_database;
 use dotenv::dotenv;
