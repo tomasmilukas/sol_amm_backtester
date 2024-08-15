@@ -22,7 +22,13 @@ impl TransactionRepo {
             r#"
             INSERT INTO transactions (signature, pool_address, block_time, slot, transaction_type, data)
             VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (signature) DO NOTHING
+            ON CONFLICT (signature) 
+            DO UPDATE SET 
+                pool_address = EXCLUDED.pool_address,
+                block_time = EXCLUDED.block_time,
+                slot = EXCLUDED.slot,
+                transaction_type = EXCLUDED.transaction_type,
+                data = EXCLUDED.data
             "#
         )
         .bind(&transaction.signature)
