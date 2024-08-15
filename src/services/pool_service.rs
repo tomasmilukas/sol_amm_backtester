@@ -44,7 +44,7 @@ impl PoolService {
             .convert_whirlpool_to_pool(pool_address.to_string(), whirlpool)
             .await?;
 
-        self.repo.insert(&pool).await?;
+        self.repo.upsert(&pool).await?;
 
         Ok(())
     }

@@ -10,10 +10,27 @@ impl PoolRepo {
         Self { db }
     }
 
-    pub async fn insert(&self, pool: &PoolModel) -> Result<(), sqlx::Error> {
+    pub async fn upsert(&self, pool: &PoolModel) -> Result<(), sqlx::Error> {
         query(
-            "INSERT INTO pools (address, name, token_a_name, token_b_name, token_a_address, token_b_address, token_a_decimals, token_b_decimals, tick_spacing, fee_rate, created_at, last_updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
+            r#"
+            INSERT INTO pools (
+                address, name, token_a_name, token_b_name, 
+                token_a_address, token_b_address, token_a_decimals, token_b_decimals, 
+                tick_spacing, fee_rate, created_at, last_updated_at
+            ) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (address) DO UPDATE SET
+                name = EXCLUDED.name,
+                token_a_name = EXCLUDED.token_a_name,
+                token_b_name = EXCLUDED.token_b_name,
+                token_a_address = EXCLUDED.token_a_address,
+                token_b_address = EXCLUDED.token_b_address,
+                token_a_decimals = EXCLUDED.token_a_decimals,
+                token_b_decimals = EXCLUDED.token_b_decimals,
+                tick_spacing = EXCLUDED.tick_spacing,
+                fee_rate = EXCLUDED.fee_rate,
+                last_updated_at = $12
+            "#,
         )
         .bind(&pool.address)
         .bind(&pool.name)
