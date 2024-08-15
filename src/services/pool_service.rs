@@ -1,8 +1,8 @@
 use crate::api::pool_api::PoolApi;
-use crate::models::pool::PoolModel;
+use crate::models::pool_model::PoolModel;
 use crate::repositories::pool_repo::PoolRepo;
 use crate::utils::decode::{decode_whirlpool, Pubkey};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 
 // Copied from Orcas source program
@@ -94,5 +94,11 @@ impl PoolService {
         );
 
         Ok(pool)
+    }
+
+    pub async fn get_pool_data(&self, pool_address: &str) -> Result<PoolModel> {
+        self.repo.get_pool_by_address(pool_address)
+            .await?
+            .ok_or_else(|| anyhow!("Pool not found for address: {}", pool_address))
     }
 }

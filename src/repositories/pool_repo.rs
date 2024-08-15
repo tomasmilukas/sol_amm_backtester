@@ -1,4 +1,4 @@
-use crate::models::pool::PoolModel;
+use crate::models::pool_model::PoolModel;
 use sqlx::{query, query_as, Pool, Postgres};
 
 pub struct PoolRepo {
