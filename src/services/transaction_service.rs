@@ -1,18 +1,17 @@
-use crate::models::transactions_model::{SwapData, TransactionModel};
+use crate::models::transactions_model::{LiquidityData, SwapData, TransactionModel};
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::utils::transaction_utils;
 use crate::{api::transaction_api::TransactionApi, models::transactions_model::TransactionData};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
+use std::time::Duration;
 
 pub struct TransactionService {
     transaction_repo: TransactionRepo,
     transaction_api: TransactionApi,
     token_a_address: String,
     token_b_address: String,
-    token_a_decimals: i16,
-    token_b_decimals: i16,
 }
 
 impl TransactionService {
@@ -21,16 +20,12 @@ impl TransactionService {
         transaction_api: TransactionApi,
         token_a_address: String,
         token_b_address: String,
-        token_a_decimals: i16,
-        token_b_decimals: i16,
     ) -> Self {
         Self {
             transaction_repo,
             transaction_api,
             token_a_address,
             token_b_address,
-            token_a_decimals,
-            token_b_decimals,
         }
     }
 
@@ -39,41 +34,47 @@ impl TransactionService {
         pool_address: &str,
         desired_start_time: DateTime<Utc>,
         desired_end_time: DateTime<Utc>,
+        full_sync: bool,
     ) -> Result<u64> {
-        let highest_block_time = self
-            .transaction_repo
-            .fetch_highest_block_time(pool_address)
-            .await?;
-        let lowest_block_time = self
-            .transaction_repo
-            .fetch_lowest_block_time(pool_address)
-            .await?;
-
         let mut total_synced = 0;
 
-        // Sync forward from highest_block_time to desired_end_time
-        if let Some(highest_time) = highest_block_time {
-            if highest_time < desired_end_time {
-                let forward_synced = self
-                    .sync_forward(pool_address, highest_time, desired_end_time)
-                    .await?;
-                total_synced += forward_synced;
-            }
-        } else {
-            // If no highest_block_time, sync everything forward
-            let forward_synced = self
-                .sync_forward(pool_address, desired_start_time, desired_end_time)
+        if full_sync {
+            // Full sync: from end time to start time
+            total_synced += self
+                .sync_backward(pool_address, desired_start_time, desired_end_time)
                 .await?;
-            total_synced += forward_synced;
-        }
+        } else {
+            // Regular sync: forward and backward as needed
+            let highest_block_time = self
+                .transaction_repo
+                .fetch_highest_block_time(pool_address)
+                .await?;
+            let lowest_block_time = self
+                .transaction_repo
+                .fetch_lowest_block_time(pool_address)
+                .await?;
 
-        // Sync backward from lowest_block_time to desired_start_time
-        if let Some(lowest_time) = lowest_block_time {
-            if lowest_time > desired_start_time {
-                let backward_synced = self
-                    .sync_backward(pool_address, desired_start_time, lowest_time)
+            // Sync forward from highest_block_time to desired_end_time
+            if let Some(highest_time) = highest_block_time {
+                if highest_time < desired_end_time {
+                    total_synced += self
+                        .sync_forward(pool_address, highest_time, desired_end_time)
+                        .await?;
+                }
+            } else {
+                // If no highest_block_time, sync everything forward
+                total_synced += self
+                    .sync_forward(pool_address, desired_start_time, desired_end_time)
                     .await?;
-                total_synced += backward_synced;
+            }
+
+            // Sync backward from lowest_block_time to desired_start_time
+            if let Some(lowest_time) = lowest_block_time {
+                if lowest_time > desired_start_time {
+                    total_synced += self
+                        .sync_backward(pool_address, desired_start_time, lowest_time)
+                        .await?;
+                }
             }
         }
 
@@ -88,7 +89,7 @@ impl TransactionService {
     ) -> Result<u64> {
         let mut synced_count = 0;
         let mut current_time = start_time;
-        let batch_size = 1000;
+        let batch_size = 10;
 
         while current_time < end_time {
             let signatures = self
@@ -106,6 +107,7 @@ impl TransactionService {
                         .timestamp_opt(block_time, 0)
                         .single()
                         .context("Invalid timestamp")?;
+
                     if tx_time > current_time && tx_time <= end_time {
                         let tx_data = self
                             .transaction_api
@@ -116,6 +118,7 @@ impl TransactionService {
                             self.convert_to_transaction_model(pool_address, &tx_data)?;
 
                         self.transaction_repo.insert(&transaction_model).await?;
+
                         synced_count += 1;
                         current_time = tx_time;
                     } else if tx_time > end_time {
@@ -123,6 +126,9 @@ impl TransactionService {
                     }
                 }
             }
+
+            // Add a small delay between batches to avoid overwhelming the API
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         Ok(synced_count)
@@ -173,6 +179,9 @@ impl TransactionService {
             }
 
             before_signature = signatures.last().map(|sig| sig.signature.clone());
+
+            // Add a small delay between batches to avoid overwhelming the API
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         Ok(synced_count)
@@ -213,24 +222,36 @@ impl TransactionService {
         let transaction_type = transaction_utils::determine_transaction_type(json)?;
 
         // Use the utility function to find pool balance changes
-        let (token_in, token_out, amount_in, amount_out) =
-            transaction_utils::find_pool_balance_changes(
-                json,
-                pool_address,
-                &self.token_a_address,
-                &self.token_b_address,
-                self.token_a_decimals,
-                self.token_b_decimals,
-            )?;
+        let (token_a, token_b, amount_a, amount_b) = transaction_utils::find_pool_balance_changes(
+            json,
+            pool_address,
+            &self.token_a_address,
+            &self.token_b_address,
+        )?;
 
         let transaction_data = match transaction_type.as_str() {
             "Swap" => TransactionData::Swap(SwapData {
-                token_in,
-                token_out,
-                amount_in,
-                amount_out,
+                token_in: if amount_a < 0.0 {
+                    token_a.clone()
+                } else {
+                    token_b.clone()
+                },
+                token_out: if amount_a < 0.0 { token_b } else { token_a },
+                amount_in: amount_a.abs().max(amount_b.abs()),
+                amount_out: amount_a.abs().min(amount_b.abs()),
             }),
-            // Handle other transaction types...
+            "AddLiquidity" => TransactionData::AddLiquidity(LiquidityData {
+                token_a,
+                token_b,
+                amount_a: amount_a.abs(),
+                amount_b: amount_b.abs(),
+            }),
+            "DecreaseLiquidity" => TransactionData::DecreaseLiquidity(LiquidityData {
+                token_a,
+                token_b,
+                amount_a: amount_a.abs(),
+                amount_b: amount_b.abs(),
+            }),
             _ => {
                 return Err(anyhow!(
                     "Unsupported transaction type: {}",

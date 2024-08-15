@@ -1,13 +1,19 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ApiResponse {
+pub struct SignatureApiResponse {
     pub jsonrpc: String,
     pub result: Vec<SignatureInfo>,
+    pub id: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TransactionApiResponse {
+    pub jsonrpc: String,
+    pub result: Value,
     pub id: u64,
 }
 
@@ -70,7 +76,7 @@ impl TransactionApi {
             .send()
             .await?;
 
-        let api_response: ApiResponse = response.json().await?;
+        let api_response: SignatureApiResponse = response.json().await?;
 
         // Filter out failed transactions
         let successful_signatures = api_response
@@ -102,7 +108,11 @@ impl TransactionApi {
             .send()
             .await?;
 
-        let api_response: ApiResponse = response.json().await?;
-        Ok(serde_json::to_value(api_response.result)?)
+        let response_text = response.text().await?;
+
+        let api_response: TransactionApiResponse =
+            serde_json::from_str(&response_text).context("Failed to parse API response")?;
+
+        Ok(api_response.result)
     }
 }

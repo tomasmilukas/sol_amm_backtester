@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::Value;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionModel {
