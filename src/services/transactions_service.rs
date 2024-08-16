@@ -1,3 +1,4 @@
+use crate::api::transactions_api::SignatureInfo;
 use crate::config::SyncMode;
 use crate::models::transactions_model::{LiquidityData, SwapData, TransactionModel};
 use crate::repositories::transactions_repo::TransactionRepo;
@@ -101,17 +102,27 @@ impl TransactionService {
                 )
                 .await?;
 
-            println!("New batch of signatures: {}", signatures.len());
+            // Filter out failed transactions
+            let successful_signatures: Vec<SignatureInfo> = signatures
+                .into_iter()
+                .filter(|sig| sig.err.is_none())
+                .collect();
 
-            if signatures.is_empty() {
+            println!("New batch of signatures: {}", successful_signatures.len());
+
+            if successful_signatures.is_empty() {
                 println!("No more signatures to process");
                 return Ok(());
             }
 
             // Clone the last signature before consuming the vector
-            signature_to_pass = signatures.last().map(|sig| sig.signature.clone());
+            signature_to_pass = successful_signatures
+                .last()
+                .map(|sig| sig.signature.clone());
 
-            let transaction_futures = signatures.into_iter().map(|sig_info| {
+            println!("{}", start_time);
+
+            let transaction_futures = successful_signatures.into_iter().map(|sig_info| {
                 async move {
                     let block_tx_time = Utc
                         .timestamp_opt(sig_info.block_time, 0)
@@ -144,6 +155,8 @@ impl TransactionService {
             });
 
             let results = join_all(transaction_futures).await;
+
+            println!("WE PASSED THIS");
 
             for result in results {
                 if let Err(e) = result {

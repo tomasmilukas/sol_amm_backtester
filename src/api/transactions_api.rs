@@ -18,6 +18,7 @@ pub struct TransactionApiResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct SignatureInfo {
     pub signature: String,
     pub slot: u64,
@@ -78,20 +79,11 @@ impl TransactionApi {
 
         let api_response: SignatureApiResponse = response.json().await?;
 
-        // Filter out failed transactions
-        let successful_signatures = api_response
-            .result
-            .into_iter()
-            .filter(|sig| sig.err.is_none())
-            .collect();
-
-        Ok(successful_signatures)
+        Ok(api_response.result)
     }
 
     pub async fn fetch_transaction_data(&self, signature: &str) -> Result<Value> {
         let url = format!("{}/v2/{}", self.alchemy_api_url, self.alchemy_api_key);
-
-        println!("New tx being fetched!");
 
         let response = self
             .client

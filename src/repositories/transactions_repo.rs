@@ -16,11 +16,17 @@ impl TransactionRepo {
     }
 
     pub async fn insert(&self, transaction: &TransactionModel) -> Result<()> {
-        transaction.validate()?;
+        println!("PRE INSERT DB: {:?}", transaction);
 
-        sqlx::query(
+        let json_data = serde_json::to_value(transaction)?;
+        println!(
+            "Serialized JSON: {}",
+            serde_json::to_string_pretty(&json_data)?
+        );
+
+        let result = sqlx::query(
             r#"
-            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, slot, transaction_type, data)
+            INSERT INTO transactions (signature, pool_address, block_time, slot, transaction_type, data)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (signature) 
             DO UPDATE SET 
@@ -34,12 +40,16 @@ impl TransactionRepo {
         .bind(&transaction.signature)
         .bind(&transaction.pool_address)
         .bind(transaction.block_time)
-        .bind(transaction.block_time_utc)
         .bind(transaction.slot)
         .bind(&transaction.transaction_type)
-        .bind(serde_json::to_value(&transaction.data)?)
+        .bind(&json_data)
         .execute(&self.pool)
-        .await?;
+        .await;
+
+        match result {
+            Ok(_) => println!("PASSED DB INSERT"),
+            Err(e) => println!("DB INSERT FAILED: {:?}", e),
+        }
 
         Ok(())
     }
@@ -134,7 +144,6 @@ impl TransactionRepo {
                     transaction_data,
                 );
 
-                transaction.validate()?;
                 Ok(transaction)
             })
             .collect()
