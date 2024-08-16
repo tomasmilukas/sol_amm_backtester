@@ -21,7 +21,7 @@ pub struct TransactionApiResponse {
 pub struct SignatureInfo {
     pub signature: String,
     pub slot: u64,
-    pub blockTime: Option<i64>,
+    pub block_time: i64,
     pub err: Option<Value>,
 }
 
@@ -90,6 +90,8 @@ impl TransactionApi {
 
     pub async fn fetch_transaction_data(&self, signature: &str) -> Result<Value> {
         let url = format!("{}/v2/{}", self.alchemy_api_url, self.alchemy_api_key);
+
+        println!("New tx being fetched!");
 
         let response = self
             .client

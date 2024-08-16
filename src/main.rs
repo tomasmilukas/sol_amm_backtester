@@ -8,10 +8,10 @@ mod services;
 mod utils;
 
 use crate::{
-    api::{pool_api::PoolApi, transaction_api::TransactionApi},
+    api::{pool_api::PoolApi, transactions_api::TransactionApi},
     db::initialize_amm_backtester_database,
     repositories::{pool_repo::PoolRepo, transactions_repo::TransactionRepo},
-    services::{pool_service::PoolService, transaction_service::TransactionService},
+    services::{pool_service::PoolService, transactions_service::TransactionService},
 };
 
 use anyhow::Context;
@@ -62,10 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
     match tx_service
-        .sync_transactions(&config.pool_address, start_time, end_time, config.full_sync)
+        .sync_transactions(&config.pool_address, start_time, config.sync_mode)
         .await
     {
-        Ok(count) => println!("Synced {} transactions successfully", count),
+        Ok(count) => println!("Synced transactions successfully"),
         Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
 
