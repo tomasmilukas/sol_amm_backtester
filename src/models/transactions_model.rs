@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct TransactionModel {
     pub signature: String,
     pub pool_address: String,
-    pub block_time: DateTime<Utc>,
+    pub block_time: i64,
+    pub block_time_utc: DateTime<Utc>,
     pub slot: i64,
     pub transaction_type: String,
     #[serde(flatten)]
@@ -41,7 +42,8 @@ impl TransactionModel {
     pub fn new(
         signature: String,
         pool_address: String,
-        block_time: DateTime<Utc>,
+        block_time: i64,
+        block_time_utc: DateTime<Utc>,
         slot: i64,
         transaction_type: String,
         data: TransactionData,
@@ -50,6 +52,7 @@ impl TransactionModel {
             signature,
             pool_address,
             block_time,
+            block_time_utc,
             slot,
             transaction_type,
             data,

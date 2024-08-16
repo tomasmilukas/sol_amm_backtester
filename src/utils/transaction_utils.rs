@@ -53,8 +53,6 @@ fn get_token_balances(
                 .context("Missing mint")?
                 .to_string();
 
-            println!("{:?}", balance["uiTokenAmount"]["uiAmount"]);
-
             let amount = balance["uiTokenAmount"]["uiAmount"]
                 .as_f64()
                 .context("Missing amount")?;

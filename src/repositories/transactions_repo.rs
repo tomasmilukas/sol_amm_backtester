@@ -20,8 +20,8 @@ impl TransactionRepo {
 
         sqlx::query(
             r#"
-            INSERT INTO transactions (signature, pool_address, block_time, slot, transaction_type, data)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, slot, transaction_type, data)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (signature) 
             DO UPDATE SET 
                 pool_address = EXCLUDED.pool_address,
@@ -34,6 +34,7 @@ impl TransactionRepo {
         .bind(&transaction.signature)
         .bind(&transaction.pool_address)
         .bind(transaction.block_time)
+        .bind(transaction.block_time_utc)
         .bind(transaction.slot)
         .bind(&transaction.transaction_type)
         .bind(serde_json::to_value(&transaction.data)?)
@@ -43,30 +44,46 @@ impl TransactionRepo {
         Ok(())
     }
 
-    pub async fn fetch_lowest_block_time(
+    pub async fn fetch_lowest_block_time_transaction(
         &self,
         pool_address: &str,
-    ) -> Result<Option<DateTime<Utc>>> {
-        let result =
-            sqlx::query("SELECT MIN(block_time) FROM transactions WHERE pool_address = $1")
-                .bind(pool_address)
-                .fetch_one(&self.pool)
-                .await?;
+    ) -> Result<Option<TransactionModel>> {
+        let result = sqlx::query(
+            r#"
+            SELECT * FROM transactions 
+            WHERE pool_address = $1 
+            ORDER BY block_time ASC 
+            LIMIT 1
+            "#,
+        )
+        .bind(pool_address)
+        .fetch_optional(&self.pool)
+        .await?;
 
-        Ok(result.get(0))
+        result
+            .map(|row| self.row_to_transaction_model(&row))
+            .transpose()
     }
 
-    pub async fn fetch_highest_block_time(
+    pub async fn fetch_highest_block_time_transaction(
         &self,
         pool_address: &str,
-    ) -> Result<Option<DateTime<Utc>>> {
-        let result =
-            sqlx::query("SELECT MAX(block_time) FROM transactions WHERE pool_address = $1")
-                .bind(pool_address)
-                .fetch_one(&self.pool)
-                .await?;
+    ) -> Result<Option<TransactionModel>> {
+        let result = sqlx::query(
+            r#"
+            SELECT * FROM transactions 
+            WHERE pool_address = $1 
+            ORDER BY block_time DESC 
+            LIMIT 1
+            "#,
+        )
+        .bind(pool_address)
+        .fetch_optional(&self.pool)
+        .await?;
 
-        Ok(result.get(0))
+        result
+            .map(|row| self.row_to_transaction_model(&row))
+            .transpose()
     }
 
     pub async fn fetch_transactions_by_time_range(
@@ -93,7 +110,8 @@ impl TransactionRepo {
             .map(|row: PgRow| {
                 let signature: String = row.get("signature");
                 let pool_address: String = row.get("pool_address");
-                let block_time: DateTime<Utc> = row.get("block_time");
+                let block_time: i64 = row.get("block_time");
+                let block_time_utc: DateTime<Utc> = row.get("block_time_utc");
                 let slot: i64 = row.get("slot");
                 let transaction_type = row.get("transaction_type");
                 let data_json: Value = row.get("data");
@@ -110,6 +128,7 @@ impl TransactionRepo {
                     signature,
                     pool_address,
                     block_time,
+                    block_time_utc,
                     slot,
                     transaction_type,
                     transaction_data,
@@ -121,18 +140,16 @@ impl TransactionRepo {
             .collect()
     }
 
-    pub async fn delete_transactions_before(
-        &self,
-        pool_address: &str,
-        before_time: DateTime<Utc>,
-    ) -> Result<u64> {
-        let result =
-            sqlx::query("DELETE FROM transactions WHERE pool_address = $1 AND block_time < $2")
-                .bind(pool_address)
-                .bind(before_time)
-                .execute(&self.pool)
-                .await?;
-
-        Ok(result.rows_affected())
+    fn row_to_transaction_model(&self, row: &sqlx::postgres::PgRow) -> Result<TransactionModel> {
+        Ok(TransactionModel {
+            signature: row.get("signature"),
+            pool_address: row.get("pool_address"),
+            block_time: row.get("block_time"),
+            block_time_utc: row.get("block_time_utc"),
+            slot: row.get("slot"),
+            transaction_type: row.get("transaction_type"),
+            data: serde_json::from_value(row.get("transaction_data"))
+                .context("Failed to deserialize transaction_data")?,
+        })
     }
 }
