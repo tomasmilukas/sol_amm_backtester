@@ -1,4 +1,3 @@
-use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -56,14 +55,6 @@ impl TransactionModel {
             slot,
             transaction_type,
             data,
-        }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        match &self.data {
-            TransactionData::Swap(_) => Ok(()),
-            TransactionData::AddLiquidity(_) => Ok(()),
-            TransactionData::DecreaseLiquidity(_) => Ok(()),
         }
     }
 }

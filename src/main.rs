@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .sync_transactions(&config.pool_address, start_time, config.sync_mode)
         .await
     {
-        Ok(count) => println!("Synced transactions successfully"),
+        Ok(f) => println!("Synced transactions successfully"),
         Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
 
