@@ -101,36 +101,50 @@ impl TransactionApi {
         Ok(api_response.result)
     }
 
-    pub async fn fetch_transaction_data(&self, signature: &str) -> Result<Value, ApiError> {
+    pub async fn fetch_transaction_data(
+        &self,
+        signatures: &[String],
+    ) -> Result<Vec<Value>, ApiError> {
         let url = format!("{}/v2/{}", self.alchemy_api_url, self.alchemy_api_key);
+
+        let batch_requests: Vec<Value> = signatures
+            .iter()
+            .enumerate()
+            .map(|(id, signature)| {
+                serde_json::json!({
+                    "id": id + 1,
+                    "jsonrpc": "2.0",
+                    "method": "getTransaction",
+                    "params": [
+                        signature,
+                        {"encoding": "json", "maxSupportedTransactionVersion": 0}
+                    ]
+                })
+            })
+            .collect();
+
+        println!("batch requests: {:?}", batch_requests.len());
 
         let response = self
             .client
             .post(&url)
             .header("accept", "application/json")
             .header("content-type", "application/json")
-            .json(&serde_json::json!({
-                "id": 1,
-                "jsonrpc": "2.0",
-                "method": "getTransaction",
-                "params": [
-                    signature,
-                    {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}
-                ]
-            }))
+            .json(&batch_requests)
             .send()
             .await?;
+
+        println!("API RESPONSE: {:?}", response);
 
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
             return Err(ApiError::RateLimit);
         }
 
         let response_text = response.text().await?;
-
-        let api_response: TransactionApiResponse = serde_json::from_str(&response_text)
+        let api_responses: Vec<TransactionApiResponse> = serde_json::from_str(&response_text)
             .context("Failed to parse API response")
             .map_err(|e| ApiError::Other(e))?;
 
-        Ok(api_response.result)
+        Ok(api_responses.into_iter().map(|r| r.result).collect())
     }
 }
