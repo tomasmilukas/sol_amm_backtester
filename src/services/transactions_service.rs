@@ -1,17 +1,20 @@
-use crate::api::transactions_api::TransactionApi;
-use crate::api::transactions_api::{ApiError, SignatureInfo};
+use crate::api::transactions_api::{ApiError, SignatureInfo, TransactionApi};
 use crate::config::SyncMode;
 use crate::models::transactions_model::TransactionModel;
 use crate::repositories::transactions_repo::TransactionRepo;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
-use futures::future::{join_all, FutureExt};
-use rand::Rng;
+use futures::future::join_all;
 use tokio::time::{sleep, Duration};
+use tokio_retry::{
+    strategy::{jitter, ExponentialBackoff},
+    Retry,
+};
 
-const MAX_RETRIES: u32 = 3;
-const BASE_DELAY: u64 = 2000; // 2s
-const RATE_LIMIT_DELAY: u64 = 30000; // 30s
+const MAX_RETRIES: u32 = 5;
+const BASE_DELAY: u64 = 1000; // 1 second
+const MAX_DELAY: u64 = 1_200_000; // 15 minutes
+const SIGNATURE_BATCH_SIZE: u32 = 100;
 
 pub struct TransactionService {
     transaction_repo: TransactionRepo,
@@ -47,7 +50,10 @@ impl TransactionService {
             // Historical sync uses the oldest transaction from db and updates from the "start time" passed in until it reaches that transaction.
             SyncMode::Historical => self.historical_sync(pool_address, start_time).await,
             // Ignores all transactions in db and just full syncs from start_time to end_time.
-            SyncMode::FullRange => self.full_range_sync(pool_address, start_time).await,
+            SyncMode::FullRange => {
+                self.fetch_and_insert_transactions(pool_address, start_time, None)
+                    .await
+            }
         }
     }
 
@@ -56,13 +62,12 @@ impl TransactionService {
             .transaction_repo
             .fetch_highest_block_time_transaction(pool_address)
             .await?;
-
-        if let Some(tx) = highest_block_tx {
-            self.fetch_and_insert_transactions(pool_address, tx.block_time_utc, None)
-                .await?;
-            Ok(())
-        } else {
-            Err(anyhow!("No existing transactions found for update sync"))
+        match highest_block_tx {
+            Some(tx) => {
+                self.fetch_and_insert_transactions(pool_address, tx.block_time_utc, None)
+                    .await
+            }
+            None => Err(anyhow!("No existing transactions found for update sync")),
         }
     }
 
@@ -71,123 +76,79 @@ impl TransactionService {
             .transaction_repo
             .fetch_lowest_block_time_transaction(pool_address)
             .await?;
-
-        if let Some(tx) = lowest_block_tx {
-            self.fetch_and_insert_transactions(pool_address, start_time, Some(tx.signature))
-                .await?;
-            Ok(())
-        } else {
-            Err(anyhow!("No existing transactions found for update sync"))
+        match lowest_block_tx {
+            Some(tx) => {
+                self.fetch_and_insert_transactions(pool_address, start_time, Some(tx.signature))
+                    .await
+            }
+            None => Err(anyhow!(
+                "No existing transactions found for historical sync"
+            )),
         }
     }
 
-    async fn full_range_sync(&self, pool_address: &str, start_time: DateTime<Utc>) -> Result<()> {
-        self.fetch_and_insert_transactions(pool_address, start_time, None)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn fetch_and_insert_transactions(
+    async fn fetch_and_insert_transactions(
         &self,
         pool_address: &str,
         start_time: DateTime<Utc>,
-        signature: Option<String>,
+        mut signature: Option<String>,
     ) -> Result<()> {
-        let batch_size = 100;
-        let mut signature_to_pass = signature;
-
         loop {
-            let signatures = match self
-                .fetch_signatures_with_retry(pool_address, batch_size, signature_to_pass.as_deref())
-                .await
-            {
-                Ok(sigs) => sigs,
-                Err(ApiError::RateLimit) => {
-                    println!(
-                        "Rate limit hit. Waiting for {} seconds before retrying...",
-                        RATE_LIMIT_DELAY / 1000
-                    );
-                    sleep(Duration::from_millis(RATE_LIMIT_DELAY)).await;
-                    continue;
-                }
-                Err(ApiError::Other(e)) => return Err(e),
-            };
+            let signatures = self
+                .fetch_signatures_with_retry(
+                    pool_address,
+                    SIGNATURE_BATCH_SIZE,
+                    signature.as_deref(),
+                )
+                .await?;
 
-            // Sleep after fetching signatures
-            sleep(Duration::from_secs(6)).await;
-
-            // Filter out failed transactions
-            let successful_signatures: Vec<SignatureInfo> = signatures
-                .into_iter()
-                .filter(|sig| sig.err.is_none())
-                .collect();
-
-            println!("New batch of signatures: {}", successful_signatures.len());
-
-            if successful_signatures.is_empty() {
+            if signatures.is_empty() {
                 println!("No more signatures to process");
                 return Ok(());
             }
 
-            // Clone the last signature before consuming the vector
-            signature_to_pass = successful_signatures
-                .last()
-                .map(|sig| sig.signature.clone());
+            signature = signatures.last().map(|sig| sig.signature.clone());
 
-            println!("{}", start_time);
-
-            let transaction_futures = successful_signatures.into_iter().map(|sig_info| {
-                async move {
-                    let block_tx_time = Utc
-                        .timestamp_opt(sig_info.block_time, 0)
-                        .single()
-                        .ok_or_else(|| anyhow!("Invalid timestamp"))?;
-
-                    // Sleep after processing each transaction
-                    sleep(Duration::from_millis(400)).await;
-
-                    if block_tx_time > start_time {
-                        match self
-                            .process_transaction_data_with_retry(pool_address, &sig_info.signature)
-                            .await
-                        {
-                            Ok(_) => {
-                                println!(
-                                    "Successfully processedt tx. Current tx: {:?}",
-                                    sig_info.signature
-                                );
-                                Ok(())
-                            }
-                            Err(ApiError::RateLimit) => {
-                                println!("Rate limit hit. Skipping this transaction.");
-                                Ok(()) // We're treating rate limit as a soft error here
-                            }
-                            Err(ApiError::Other(e)) => Err(anyhow!(
-                                "Failed to process transaction: {}. Error: {}",
-                                sig_info.signature,
-                                e
-                            )),
-                        }
-                    } else {
-                        Err(anyhow!("Reached start_time limit"))
-                    }
-                }
-                .boxed()
-            });
+            let transaction_futures = signatures
+                .into_iter()
+                .filter(|sig| sig.err.is_none())
+                .map(|sig_info| self.process_transaction(pool_address, sig_info, start_time));
 
             let results = join_all(transaction_futures).await;
 
-            // Add a longer delay after processing all transactions in the batch
-            sleep(Duration::from_secs(13)).await;
-
-            for result in results {
-                if let Err(e) = result {
-                    if e.to_string().contains("Reached start_time limit") {
-                        return Ok(());
-                    }
-                }
+            if results
+                .iter()
+                .any(|r| matches!(r, Err(e) if e.to_string().contains("Reached start_time limit")))
+            {
+                return Ok(());
             }
+
+            sleep(Duration::from_secs(13)).await;
         }
+    }
+
+    async fn process_transaction(
+        &self,
+        pool_address: &str,
+        sig_info: SignatureInfo,
+        start_time: DateTime<Utc>,
+    ) -> Result<()> {
+        let block_tx_time = Utc
+            .timestamp_opt(sig_info.block_time, 0)
+            .single()
+            .ok_or_else(|| anyhow!("Invalid timestamp"))?;
+
+        if block_tx_time <= start_time {
+            return Err(anyhow!("Reached start_time limit"));
+        }
+
+        self.process_transaction_data_with_retry(pool_address, &sig_info.signature)
+            .await?;
+        println!(
+            "Successfully processed tx. Current tx: {:?}",
+            sig_info.signature
+        );
+        Ok(())
     }
 
     async fn fetch_signatures_with_retry(
@@ -195,60 +156,50 @@ impl TransactionService {
         pool_address: &str,
         batch_size: u32,
         before: Option<&str>,
-    ) -> Result<Vec<SignatureInfo>, ApiError> {
-        for attempt in 0..MAX_RETRIES {
+    ) -> Result<Vec<SignatureInfo>> {
+        let retry_strategy = ExponentialBackoff::from_millis(BASE_DELAY)
+            .max_delay(Duration::from_millis(MAX_DELAY))
+            .map(jitter)
+            .take(MAX_RETRIES as usize);
+
+        Retry::spawn(retry_strategy, || async {
             match self
                 .transaction_api
                 .fetch_transaction_signatures(pool_address, batch_size, before)
                 .await
             {
-                Ok(signatures) => return Ok(signatures),
+                Ok(signatures) => Ok(signatures),
                 Err(ApiError::RateLimit) => {
-                    if attempt < MAX_RETRIES - 1 {
-                        println!("Rate limit hit. Retrying after delay...");
-                        sleep(Duration::from_millis(RATE_LIMIT_DELAY)).await;
-                    } else {
-                        return Err(ApiError::RateLimit);
-                    }
+                    println!("Rate limit hit. Retrying...");
+                    Err(anyhow!("Rate limit hit"))
                 }
-                Err(ApiError::Other(e)) => return Err(ApiError::Other(e)),
+                Err(ApiError::Other(e)) => Err(e),
             }
-        }
-
-        Err(ApiError::Other(anyhow!(
-            "Max retries reached while fetching signatures"
-        )))
+        })
+        .await
     }
 
     async fn process_transaction_data_with_retry(
         &self,
         pool_address: &str,
         signature: &str,
-    ) -> Result<(), ApiError> {
-        for attempt in 0..MAX_RETRIES {
+    ) -> Result<()> {
+        let retry_strategy = ExponentialBackoff::from_millis(BASE_DELAY)
+            .max_delay(Duration::from_millis(MAX_DELAY))
+            .map(jitter)
+            .take(MAX_RETRIES as usize);
+
+        Retry::spawn(retry_strategy, || async {
             match self.process_transaction_data(pool_address, signature).await {
-                Ok(()) => return Ok(()),
+                Ok(()) => Ok(()),
                 Err(ApiError::RateLimit) => {
-                    if attempt < MAX_RETRIES - 1 {
-                        println!("Rate limit hit. Retrying after delay...");
-                        sleep(Duration::from_millis(RATE_LIMIT_DELAY)).await;
-                    } else {
-                        return Err(ApiError::RateLimit);
-                    }
+                    println!("Rate limit hit. Retrying...");
+                    Err(anyhow!("Rate limit hit"))
                 }
-                Err(ApiError::Other(e)) => return Err(ApiError::Other(e)),
+                Err(ApiError::Other(e)) => Err(e),
             }
-        }
-
-        Err(ApiError::Other(anyhow!(
-            "Max retries reached while processing transaction data"
-        )))
-    }
-
-    fn calculate_delay(&self, attempt: u32) -> Duration {
-        let mut rng = rand::thread_rng();
-        let jitter = rng.gen_range(0..1000);
-        Duration::from_millis(BASE_DELAY * 2u64.pow(attempt) + jitter)
+        })
+        .await
     }
 
     async fn process_transaction_data(
@@ -267,7 +218,7 @@ impl TransactionService {
             &self.token_a_address,
             &self.token_b_address,
         )
-        .map_err(|e| ApiError::Other(e.into()))?;
+        .map_err(ApiError::Other)?;
 
         if matches!(
             model.transaction_type.as_str(),
@@ -276,8 +227,7 @@ impl TransactionService {
             self.transaction_repo
                 .insert(&model)
                 .await
-                .map_err(|e| ApiError::Other(e.into()))?;
-
+                .map_err(ApiError::Other)?;
             Ok(())
         } else {
             Err(ApiError::Other(anyhow!("Not a desired transaction type.")))
