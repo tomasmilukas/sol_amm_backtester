@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
@@ -32,6 +33,21 @@ pub struct TransactionApi {
     alchemy_api_url: String,
 }
 
+#[derive(Debug)]
+pub enum ApiError {
+    RateLimit,
+    Other(anyhow::Error),
+}
+
+impl From<reqwest::Error> for ApiError {
+    fn from(error: reqwest::Error) -> Self {
+        match error.status() {
+            Some(StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimit,
+            _ => ApiError::Other(error.into()),
+        }
+    }
+}
+
 impl TransactionApi {
     pub fn new() -> Result<Self> {
         let alchemy_api_key = env::var("ALCHEMY_API_KEY").context("ALCHEMY_API_KEY must be set")?;
@@ -49,7 +65,7 @@ impl TransactionApi {
         pool_address: &str,
         limit: u32,
         before: Option<&str>,
-    ) -> Result<Vec<SignatureInfo>> {
+    ) -> Result<Vec<SignatureInfo>, ApiError> {
         let url = format!("{}/v2/{}", self.alchemy_api_url, self.alchemy_api_key);
 
         let mut params = serde_json::json!({
@@ -77,12 +93,15 @@ impl TransactionApi {
             .send()
             .await?;
 
-        let api_response: SignatureApiResponse = response.json().await?;
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            return Err(ApiError::RateLimit);
+        }
 
+        let api_response: SignatureApiResponse = response.json().await?;
         Ok(api_response.result)
     }
 
-    pub async fn fetch_transaction_data(&self, signature: &str) -> Result<Value> {
+    pub async fn fetch_transaction_data(&self, signature: &str) -> Result<Value, ApiError> {
         let url = format!("{}/v2/{}", self.alchemy_api_url, self.alchemy_api_key);
 
         let response = self
@@ -102,10 +121,15 @@ impl TransactionApi {
             .send()
             .await?;
 
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            return Err(ApiError::RateLimit);
+        }
+
         let response_text = response.text().await?;
 
-        let api_response: TransactionApiResponse =
-            serde_json::from_str(&response_text).context("Failed to parse API response")?;
+        let api_response: TransactionApiResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse API response")
+            .map_err(|e| ApiError::Other(e))?;
 
         Ok(api_response.result)
     }
