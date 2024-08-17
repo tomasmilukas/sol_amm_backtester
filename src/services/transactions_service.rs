@@ -12,9 +12,10 @@ use tokio_retry::{
 };
 
 const MAX_RETRIES: u32 = 5;
-const BASE_DELAY: u64 = 1000; // 1 second
-const MAX_DELAY: u64 = 1_200_000; // 15 minutes
-const SIGNATURE_BATCH_SIZE: u32 = 100;
+const BASE_DELAY: u64 = 5000; // 5 second
+const MAX_DELAY: u64 = 300_000; // 5 minutes
+const SIGNATURE_BATCH_SIZE: u32 = 1000; // Maximum signatures to fetch in one batch
+const TX_BATCH_SIZE: usize = 10; // Maximum transactions to process in one batch
 
 pub struct TransactionService {
     transaction_repo: TransactionRepo,
@@ -62,6 +63,7 @@ impl TransactionService {
             .transaction_repo
             .fetch_highest_block_time_transaction(pool_address)
             .await?;
+        
         match highest_block_tx {
             Some(tx) => {
                 self.fetch_and_insert_transactions(pool_address, tx.block_time_utc, None)
@@ -76,6 +78,7 @@ impl TransactionService {
             .transaction_repo
             .fetch_lowest_block_time_transaction(pool_address)
             .await?;
+
         match lowest_block_tx {
             Some(tx) => {
                 self.fetch_and_insert_transactions(pool_address, start_time, Some(tx.signature))
@@ -102,35 +105,83 @@ impl TransactionService {
                 )
                 .await?;
 
-            if signatures.is_empty() {
-                println!("No more signatures to process");
-                return Ok(());
-            }
-
-            signature = signatures.last().map(|sig| sig.signature.clone());
-
-            let transaction_futures = signatures
+            let filtered_signatures: Vec<SignatureInfo> = signatures
                 .into_iter()
                 .filter(|sig| sig.err.is_none())
-                .map(|sig_info| self.process_transaction(pool_address, sig_info, start_time));
+                .collect();
 
-            let results = join_all(transaction_futures).await;
+            println!("Processing {} signatures", filtered_signatures.len());
 
-            if results
-                .iter()
-                .any(|r| matches!(r, Err(e) if e.to_string().contains("Reached start_time limit")))
-            {
+            signature = filtered_signatures.last().map(|sig| sig.signature.clone());
+
+            // Process transactions in smaller batches
+            let mut reached_start_time = false;
+            for chunk in filtered_signatures.chunks(TX_BATCH_SIZE) {
+                let result = self
+                    .process_transaction_batch(pool_address, chunk, start_time)
+                    .await;
+
+                match result {
+                    Ok(_) => {}
+                    Err(e) if e.to_string().contains("Reached start_time limit") => {
+                        println!("Reached start_time limit. Exiting.");
+                        reached_start_time = true;
+                        break;
+                    }
+                    Err(e) => {
+                        println!("Error processing batch: {:?}", e);
+                    }
+                }
+            }
+
+            if reached_start_time {
                 return Ok(());
             }
 
-            sleep(Duration::from_secs(13)).await;
+            println!("Finished processing all signatures. Waiting before fetching next batch...");
+            sleep(Duration::from_secs(10)).await;
         }
     }
 
-    async fn process_transaction(
+    async fn process_transaction_batch(
         &self,
         pool_address: &str,
-        sig_info: SignatureInfo,
+        signatures: &[SignatureInfo],
+        start_time: DateTime<Utc>,
+    ) -> Result<()> {
+        let signature_strings: Vec<String> =
+            signatures.iter().map(|sig| sig.signature.clone()).collect();
+        let tx_data_batch = self
+            .fetch_transaction_data_batch_with_retry(&signature_strings)
+            .await?;
+
+        let futures =
+            tx_data_batch
+                .into_iter()
+                .zip(signatures.iter())
+                .map(|(tx_data, sig_info)| {
+                    self.process_single_transaction(pool_address, tx_data, sig_info, start_time)
+                });
+
+        let results = join_all(futures).await;
+
+        for result in results {
+            if let Err(e) = result {
+                if e.to_string().contains("Reached start_time limit") {
+                    return Err(e);
+                }
+                println!("Error processing transaction: {:?}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn process_single_transaction(
+        &self,
+        pool_address: &str,
+        tx_data: serde_json::Value,
+        sig_info: &SignatureInfo,
         start_time: DateTime<Utc>,
     ) -> Result<()> {
         let block_tx_time = Utc
@@ -142,13 +193,56 @@ impl TransactionService {
             return Err(anyhow!("Reached start_time limit"));
         }
 
-        self.process_transaction_data_with_retry(pool_address, &sig_info.signature)
-            .await?;
-        println!(
-            "Successfully processed tx. Current tx: {:?}",
-            sig_info.signature
-        );
+        let model = TransactionModel::convert_from_json(
+            pool_address,
+            &tx_data,
+            &self.token_a_address,
+            &self.token_b_address,
+        )
+        .map_err(|e| anyhow!("Failed to convert transaction: {:?}", e))?;
+
+        if matches!(
+            model.transaction_type.as_str(),
+            "Swap" | "AddLiquidity" | "DecreaseLiquidity"
+        ) {
+            self.transaction_repo
+                .insert(&model)
+                .await
+                .map_err(|e| anyhow!("Failed to insert transaction: {:?}", e))?;
+
+            println!(
+                "Successfully processed tx. Current tx: {:?}",
+                sig_info.signature
+            );
+        }
+
         Ok(())
+    }
+
+    async fn fetch_transaction_data_batch_with_retry(
+        &self,
+        signatures: &[String],
+    ) -> Result<Vec<serde_json::Value>> {
+        let retry_strategy = ExponentialBackoff::from_millis(BASE_DELAY)
+            .max_delay(Duration::from_millis(MAX_DELAY))
+            .map(jitter)
+            .take(MAX_RETRIES as usize);
+
+        Retry::spawn(retry_strategy, || async {
+            match self
+                .transaction_api
+                .fetch_transaction_data(signatures)
+                .await
+            {
+                Ok(tx_data) => Ok(tx_data),
+                Err(ApiError::RateLimit) => {
+                    println!("Rate limit hit for transaction data. Retrying...");
+                    Err(anyhow!("Rate limit hit"))
+                }
+                Err(ApiError::Other(e)) => Err(e),
+            }
+        })
+        .await
     }
 
     async fn fetch_signatures_with_retry(
@@ -170,67 +264,12 @@ impl TransactionService {
             {
                 Ok(signatures) => Ok(signatures),
                 Err(ApiError::RateLimit) => {
-                    println!("Rate limit hit. Retrying...");
+                    println!("Rate limit hit for signatures. Retrying...");
                     Err(anyhow!("Rate limit hit"))
                 }
                 Err(ApiError::Other(e)) => Err(e),
             }
         })
         .await
-    }
-
-    async fn process_transaction_data_with_retry(
-        &self,
-        pool_address: &str,
-        signature: &str,
-    ) -> Result<()> {
-        let retry_strategy = ExponentialBackoff::from_millis(BASE_DELAY)
-            .max_delay(Duration::from_millis(MAX_DELAY))
-            .map(jitter)
-            .take(MAX_RETRIES as usize);
-
-        Retry::spawn(retry_strategy, || async {
-            match self.process_transaction_data(pool_address, signature).await {
-                Ok(()) => Ok(()),
-                Err(ApiError::RateLimit) => {
-                    println!("Rate limit hit. Retrying...");
-                    Err(anyhow!("Rate limit hit"))
-                }
-                Err(ApiError::Other(e)) => Err(e),
-            }
-        })
-        .await
-    }
-
-    async fn process_transaction_data(
-        &self,
-        pool_address: &str,
-        signature: &str,
-    ) -> Result<(), ApiError> {
-        let tx_data = self
-            .transaction_api
-            .fetch_transaction_data(signature)
-            .await?;
-
-        let model = TransactionModel::convert_from_json(
-            pool_address,
-            &tx_data,
-            &self.token_a_address,
-            &self.token_b_address,
-        )
-        .map_err(ApiError::Other)?;
-
-        if matches!(
-            model.transaction_type.as_str(),
-            "Swap" | "AddLiquidity" | "DecreaseLiquidity"
-        ) {
-            self.transaction_repo
-                .insert(&model)
-                .await
-                .map_err(ApiError::Other)?;
-            Ok(())
-        } else {
-            Err(ApiError::Other(anyhow!("Not a desired transaction type.")))
-        }
     }
 }
