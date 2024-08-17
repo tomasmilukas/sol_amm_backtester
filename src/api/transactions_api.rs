@@ -123,8 +123,6 @@ impl TransactionApi {
             })
             .collect();
 
-        println!("batch requests: {:?}", batch_requests.len());
-
         let response = self
             .client
             .post(&url)
@@ -133,8 +131,6 @@ impl TransactionApi {
             .json(&batch_requests)
             .send()
             .await?;
-
-        println!("API RESPONSE: {:?}", response);
 
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
             return Err(ApiError::RateLimit);
