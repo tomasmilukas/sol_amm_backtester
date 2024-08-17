@@ -4,7 +4,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use std::fmt;
 use std::io::{Cursor, Read};
 
-use crate::service::pool_service::Whirlpool;
+use crate::models::pool_model::Whirlpool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pubkey([u8; 32]);

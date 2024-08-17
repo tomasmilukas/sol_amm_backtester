@@ -1,51 +1,72 @@
 mod api;
 mod backtester;
+mod config;
 mod db;
 mod models;
 mod repositories;
-mod service;
+mod services;
 mod utils;
 
-use api::pool_api::PoolApi;
-use db::initialize_amm_backtester_database;
+use crate::{
+    api::{pool_api::PoolApi, transactions_api::TransactionApi},
+    db::initialize_amm_backtester_database,
+    repositories::{pool_repo::PoolRepo, transactions_repo::TransactionRepo},
+    services::{pool_service::PoolService, transactions_service::TransactionService},
+};
+
+use anyhow::Context;
+use chrono::{Duration, Utc};
+use config::AppConfig;
 use dotenv::dotenv;
-use repositories::pool_repo::PoolRepo;
-use service::pool_service::PoolService;
 use sqlx::postgres::PgPoolOptions;
-use std::env;
-use std::process;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let pool_address = match env::args().nth(1) {
-        Some(address) => address,
-        None => {
-            eprintln!("Error: Pool address is required.");
-            eprintln!("Usage: cargo run -- <pool_address>");
-            process::exit(1);
-        }
-    };
-
     dotenv().ok();
 
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let config = AppConfig::from_env()?;
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(&database_url)
+        .connect(&config.database_url)
         .await?;
 
-    initialize_amm_backtester_database(&pool).await?;
+    initialize_amm_backtester_database(&pool)
+        .await
+        .context("Failed to initialize database")?;
 
-    let pool_repo = PoolRepo::new(pool);
+    let pool_repo = PoolRepo::new(pool.clone());
     let pool_api = PoolApi::new()?;
-
     let pool_service = PoolService::new(pool_repo, pool_api);
 
-    // let pool_address = "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q";
-    match pool_service.fetch_and_store_pool_data(&pool_address).await {
+    match pool_service
+        .fetch_and_store_pool_data(&config.pool_address)
+        .await
+    {
         Ok(()) => println!("Pool data fetched and stored successfully"),
-        Err(e) => eprintln!("Error: {}", e),
+        Err(e) => eprintln!("Pool fetching related error: {}", e),
+    }
+
+    let pool_data = pool_service.get_pool_data(&config.pool_address).await?;
+
+    let tx_repo = TransactionRepo::new(pool);
+    let tx_api = TransactionApi::new()?;
+    let tx_service = TransactionService::new(
+        tx_repo,
+        tx_api,
+        pool_data.token_a_address,
+        pool_data.token_b_address,
+    );
+
+    // Sync transactions
+    let end_time = Utc::now();
+    let start_time = end_time - Duration::days(config.sync_days);
+    match tx_service
+        .sync_transactions(&config.pool_address, start_time, config.sync_mode)
+        .await
+    {
+        Ok(f) => println!("Synced transactions successfully"),
+        Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
 
     Ok(())

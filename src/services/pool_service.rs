@@ -1,31 +1,9 @@
 use crate::api::pool_api::PoolApi;
-use crate::models::pool::PoolModel;
+use crate::models::pool_model::{PoolModel, Whirlpool};
 use crate::repositories::pool_repo::PoolRepo;
-use crate::utils::decode::{decode_whirlpool, Pubkey};
-use anyhow::{Context, Result};
+use crate::utils::decode::decode_whirlpool;
+use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
-
-// Copied from Orcas source program
-#[derive(Debug)]
-pub struct Whirlpool {
-    pub whirlpools_config: Pubkey,
-    pub whirlpool_bump: [u8; 1],
-    pub tick_spacing: u16,
-    pub tick_spacing_seed: [u8; 2],
-    pub fee_rate: u16,
-    pub protocol_fee_rate: u16,
-    pub liquidity: u128,
-    pub sqrt_price: u128,
-    pub tick_current_index: i32,
-    pub protocol_fee_owed_a: u64,
-    pub protocol_fee_owed_b: u64,
-    pub token_mint_a: Pubkey,
-    pub token_vault_a: Pubkey,
-    pub fee_growth_global_a: u128,
-    pub token_mint_b: Pubkey,
-    pub token_vault_b: Pubkey,
-    pub fee_growth_global_b: u128,
-}
 
 pub struct PoolService {
     repo: PoolRepo,
@@ -44,7 +22,7 @@ impl PoolService {
             .convert_whirlpool_to_pool(pool_address.to_string(), whirlpool)
             .await?;
 
-        self.repo.insert(&pool).await?;
+        self.repo.upsert(&pool).await?;
 
         Ok(())
     }
@@ -78,21 +56,20 @@ impl PoolService {
         let token_a_metadata = self.api.fetch_token_metadata(&token_a_address).await?;
         let token_b_metadata = self.api.fetch_token_metadata(&token_b_address).await?;
 
-        let tick_spacing = whirlpool.tick_spacing;
-        let fee_rate = whirlpool.fee_rate;
-
-        let pool = PoolModel::new(
-            pool_address,
-            token_a_metadata.symbol,
-            token_b_metadata.symbol,
-            token_a_address,
-            token_b_address,
-            token_a_metadata.decimals as i16,
-            token_b_metadata.decimals as i16,
-            tick_spacing as i16,
-            fee_rate as i16,
-        );
+        let pool = PoolModel::from_whirlpool(
+            pool_address.to_string(),
+            whirlpool,
+            token_a_metadata,
+            token_b_metadata,
+        )?;
 
         Ok(pool)
+    }
+
+    pub async fn get_pool_data(&self, pool_address: &str) -> Result<PoolModel> {
+        self.repo
+            .get_pool_by_address(pool_address)
+            .await?
+            .ok_or_else(|| anyhow!("Pool not found for address: {}", pool_address))
     }
 }
