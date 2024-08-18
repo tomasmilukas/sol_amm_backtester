@@ -9,7 +9,7 @@ mod utils;
 
 use crate::{
     api::{pool_api::PoolApi, transactions_api::TransactionApi},
-    db::initialize_amm_backtester_database,
+    db::initialize_sol_amm_backtester_database,
     repositories::{pool_repo::PoolRepo, transactions_repo::TransactionRepo},
     services::{pool_service::PoolService, transactions_service::TransactionService},
 };
@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&config.database_url)
         .await?;
 
-    initialize_amm_backtester_database(&pool)
+    initialize_sol_amm_backtester_database(&pool)
         .await
         .context("Failed to initialize database")?;
 
