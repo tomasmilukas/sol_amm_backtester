@@ -1,12 +1,13 @@
 use sqlx::postgres::PgPool;
 use anyhow::Result;
 
-pub async fn initialize_amm_backtester_database(pool: &PgPool) -> Result<()> {
+pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()> {
     let statements = [
         // Create pools table (unchanged)
         r#"
         CREATE TABLE IF NOT EXISTS pools (
             address TEXT PRIMARY KEY,
+            platform TEXT NOT NULL,
             name TEXT NOT NULL,
             token_a_name TEXT NOT NULL,
             token_b_name TEXT NOT NULL,
