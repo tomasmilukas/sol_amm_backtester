@@ -21,7 +21,7 @@ pub struct TransactionModel {
 #[serde(tag = "transaction_type", content = "data")]
 pub enum TransactionData {
     Swap(SwapData),
-    AddLiquidity(LiquidityData),
+    IncreaseLiquidity(LiquidityData),
     DecreaseLiquidity(LiquidityData),
 }
 
@@ -120,7 +120,7 @@ impl TransactionModel {
                 amount_in: amount_a.abs().max(amount_b.abs()),
                 amount_out: amount_a.abs().min(amount_b.abs()),
             }),
-            "AddLiquidity" => TransactionData::AddLiquidity(LiquidityData {
+            "IncreaseLiquidity" => TransactionData::IncreaseLiquidity(LiquidityData {
                 token_a,
                 token_b,
                 amount_a: amount_a.abs(),

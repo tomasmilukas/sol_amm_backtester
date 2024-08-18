@@ -11,8 +11,8 @@ pub fn determine_transaction_type(json: &Value) -> Result<String> {
         let message = message.as_str().unwrap_or("");
         if message.contains("Instruction: Swap") {
             return Ok("Swap".to_string());
-        } else if message.contains("Instruction: AddLiquidity") {
-            return Ok("AddLiquidity".to_string());
+        } else if message.contains("Instruction: IncreaseLiquidity") {
+            return Ok("IncreaseLiquidity".to_string());
         } else if message.contains("Instruction: DecreaseLiquidity") {
             return Ok("DecreaseLiquidity".to_string());
         }

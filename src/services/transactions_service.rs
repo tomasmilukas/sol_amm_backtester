@@ -5,7 +5,7 @@ use crate::repositories::transactions_repo::TransactionRepo;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use futures::future::join_all;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use tokio_retry::{
     strategy::{jitter, ExponentialBackoff},
     Retry,
@@ -63,7 +63,7 @@ impl TransactionService {
             .transaction_repo
             .fetch_highest_block_time_transaction(pool_address)
             .await?;
-        
+
         match highest_block_tx {
             Some(tx) => {
                 self.fetch_and_insert_transactions(pool_address, tx.block_time_utc, None)
@@ -137,9 +137,6 @@ impl TransactionService {
             if reached_start_time {
                 return Ok(());
             }
-
-            println!("Finished processing all signatures. Waiting before fetching next batch...");
-            sleep(Duration::from_secs(10)).await;
         }
     }
 
@@ -203,7 +200,7 @@ impl TransactionService {
 
         if matches!(
             model.transaction_type.as_str(),
-            "Swap" | "AddLiquidity" | "DecreaseLiquidity"
+            "Swap" | "IncreaseLiquidity" | "DecreaseLiquidity"
         ) {
             self.transaction_repo
                 .insert(&model)
