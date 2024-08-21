@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use constants::ORCA_OPTIMIZED_PATH_BASE_URL;
 use serde_json::Value;
-use sqlx::Transaction;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,9 +31,10 @@ pub enum AMMPlatforms {
     Raydium,
 }
 
+#[derive(Debug, Clone)]
 pub enum Cursor {
     DateTime(DateTime<Utc>),
-    String(String),
+    OptionalSignature(Option<String>),
 }
 
 #[async_trait]
@@ -46,7 +46,7 @@ pub trait AMMService: Send + Sync {
         &self,
         pool_address: &str,
         start_time: DateTime<Utc>,
-        cursor: Option<Cursor>,
+        cursor: Cursor,
     ) -> Result<Value>;
 
     fn convert_data_to_transactions_model(
@@ -148,6 +148,8 @@ pub async fn create_amm_service(
     transaction_api: TransactionApi,
     token_a_address: &str,
     token_b_address: &str,
+    token_a_vault: &str,
+    token_b_vault: &str,
 ) -> Result<Arc<dyn AMMService>> {
     match platform {
         AMMPlatforms::Orca => {
@@ -182,6 +184,8 @@ pub async fn create_amm_service(
                             transaction_api,
                             String::from(token_a_address),
                             String::from(token_b_address),
+                            String::from(token_a_vault),
+                            String::from(token_b_vault),
                         )
                         .await,
                     ));

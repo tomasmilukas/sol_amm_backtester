@@ -6,8 +6,7 @@ use crate::utils::transaction_utils::retry_with_backoff;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde_json::{from_str, Value};
-use std::env;
+use serde_json::Value;
 
 use super::transactions_amm_service::Cursor;
 
@@ -67,7 +66,7 @@ impl AMMService for OrcaStandardAMM {
         &self,
         pool_address: &str,
         start_time: DateTime<Utc>,
-        cursor: Option<Cursor>,
+        cursor: Cursor,
     ) -> Result<Value> {
         // Main logic separation for the JSON URL thing. Make hte optimized fn in the other Orca implementation and the check url health which is a constant at the top.
         // In the other else just use the standard fetch signatures and then batch fetch tx data. then convert the batch with the arrays.
@@ -96,13 +95,19 @@ impl AMMService for OrcaStandardAMM {
         start_time: DateTime<Utc>,
         latest_db_transaction: Option<TransactionModel>,
     ) -> Result<()> {
+        let mut cursor = Cursor::OptionalSignature(None);
+
+        if Some(&latest_db_transaction).is_some() {
+            cursor = Cursor::OptionalSignature(Some(latest_db_transaction.unwrap().signature))
+        }
+
         // REMEMBER THIS MUST BE LOOPED! IT WILL RUN UP UNTIL THE START_TIME IS REACHED. CHECK OG CODE.
         // THIS MUST BE ON EVERY AMM IMPLEMENTATION SINCE THEIR CURSOR UPDATES WORKED DIFFERENTLY ETC.
 
         // fetch transactions must give back a cursor to pass on next!!!!
 
         let data = self
-            .fetch_transactions(pool_address, start_time, None)
+            .fetch_transactions(pool_address, start_time, cursor)
             .await?;
 
         let transactions = self.convert_data_to_transactions_model(pool_address, data);
