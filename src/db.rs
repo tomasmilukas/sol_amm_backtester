@@ -1,9 +1,9 @@
-use sqlx::postgres::PgPool;
 use anyhow::Result;
+use sqlx::postgres::PgPool;
 
 pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()> {
     let statements = [
-        // Create pools table (unchanged)
+
         r#"
         CREATE TABLE IF NOT EXISTS pools (
             address TEXT PRIMARY KEY,
@@ -21,7 +21,7 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
-        // Create transactions table (corrected)
+
         r#"
         CREATE TABLE IF NOT EXISTS transactions (
             signature TEXT PRIMARY KEY,
@@ -30,11 +30,12 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             block_time_utc TIMESTAMPTZ NOT NULL,
             slot BIGINT NOT NULL,
             transaction_type TEXT NOT NULL,
+            ready_for_backtesting BOOL NOT NULL,
             data JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
-        // Create indexes (unchanged)
+
         "CREATE INDEX IF NOT EXISTS idx_transactions_pool_address ON transactions(pool_address)",
         "CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time)",
         "CREATE INDEX IF NOT EXISTS idx_transactions_block_time_utc ON transactions(block_time_utc)",

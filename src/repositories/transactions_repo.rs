@@ -146,6 +146,7 @@ impl TransactionRepo {
             block_time_utc: row.get("block_time_utc"),
             slot: row.get("slot"),
             transaction_type: row.get("transaction_type"),
+            ready_for_backtesting: row.get("ready_for_backtesting"),
             data: serde_json::from_value(row.get("transaction_data"))
                 .context("Failed to deserialize transaction_data")?,
         })

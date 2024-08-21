@@ -69,6 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tx_api,
         &pool_data.token_a_address,
         &pool_data.token_b_address,
+        &pool_data.token_a_vault,
+        &pool_data.token_b_vault,
     )
     .await
     {
