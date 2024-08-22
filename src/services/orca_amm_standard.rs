@@ -90,6 +90,217 @@ impl OrcaStandardAMM {
 
         Err(anyhow!("Unable to determine transaction type"))
     }
+
+    fn extract_common_data(
+        &self,
+        tx_data: &Value,
+        pool_address: &str,
+    ) -> Result<CommonTransactionData> {
+        let signature = tx_data["transaction"]["signatures"][0]
+            .as_str()
+            .context("Missing signature")?
+            .to_string();
+        let block_time = tx_data["blockTime"].as_i64().context("Missing blockTime")?;
+        let block_time_utc =
+            DateTime::<Utc>::from_timestamp(block_time, 0).context("Invalid blockTime")?;
+
+        let pre_balances = self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
+        let post_balances = self.get_token_balances(tx_data, "postTokenBalances", pool_address)?;
+
+        let amount_a = post_balances
+            .get(&self.token_a_address)
+            .copied()
+            .unwrap_or(0.0)
+            - pre_balances
+                .get(&self.token_a_address)
+                .copied()
+                .unwrap_or(0.0);
+        let amount_b = post_balances
+            .get(&self.token_b_address)
+            .copied()
+            .unwrap_or(0.0)
+            - pre_balances
+                .get(&self.token_b_address)
+                .copied()
+                .unwrap_or(0.0);
+
+        Ok(CommonTransactionData {
+            signature,
+            block_time,
+            block_time_utc,
+            amount_a,
+            amount_b,
+        })
+    }
+
+    fn get_token_balances(
+        &self,
+        json: &Value,
+        balance_type: &str,
+        pool_address: &str,
+    ) -> Result<HashMap<String, f64>> {
+        let balances = json["meta"][balance_type]
+            .as_array()
+            .context(format!("Missing {}", balance_type))?;
+
+        let mut result = HashMap::new();
+        for balance in balances {
+            if balance["owner"].as_str() == Some(pool_address) {
+                let mint = balance["mint"]
+                    .as_str()
+                    .context("Missing mint")?
+                    .to_string();
+
+                let amount = balance["uiTokenAmount"]["uiAmount"]
+                    .as_f64()
+                    .context("Missing amount")?;
+
+                result.insert(mint, amount);
+            }
+        }
+        Ok(result)
+    }
+
+    fn extract_liquidity_amounts(&self, tx_data: &Value, pool_address: &str) -> Result<(f64, f64)> {
+        let pre_balances = self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
+        let post_balances = self.get_token_balances(tx_data, "postTokenBalances", pool_address)?;
+
+        let amount_a = post_balances
+            .get(&self.token_a_address)
+            .copied()
+            .unwrap_or(0.0)
+            - pre_balances
+                .get(&self.token_a_address)
+                .copied()
+                .unwrap_or(0.0);
+        let amount_b = post_balances
+            .get(&self.token_b_address)
+            .copied()
+            .unwrap_or(0.0)
+            - pre_balances
+                .get(&self.token_b_address)
+                .copied()
+                .unwrap_or(0.0);
+
+        Ok((amount_a.abs(), amount_b.abs()))
+    }
+
+    fn convert_liquidity_data(
+        &self,
+        tx_data: &Value,
+        pool_address: &str,
+    ) -> Result<TransactionModel> {
+        let common_data = self.extract_common_data(tx_data)?;
+        let transaction_type = Self::determine_transaction_type(tx_data)?;
+
+        let (amount_a, amount_b) = self.extract_liquidity_amounts(tx_data, pool_address)?;
+
+        Ok(TransactionModel {
+            signature: common_data.signature,
+            pool_address: pool_address.to_string(),
+            block_time: common_data.block_time,
+            block_time_utc: common_data.block_time_utc,
+            transaction_type: transaction_type.clone(),
+            ready_for_backtesting: true,
+            data: match transaction_type.as_str() {
+                "IncreaseLiquidity" | "IncreaseLiquidityV2" => {
+                    TransactionData::IncreaseLiquidity(LiquidityData {
+                        key_position: "".to_string(),
+                        token_a: self.token_a_address.clone(),
+                        token_b: self.token_b_address.clone(),
+                        amount_a,
+                        amount_b,
+                        tick_lower: None,
+                        tick_upper: None,
+                    })
+                }
+                "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
+                    TransactionData::DecreaseLiquidity(LiquidityData {
+                        key_position: "".to_string(),
+                        token_a: self.token_a_address.clone(),
+                        token_b: self.token_b_address.clone(),
+                        amount_a,
+                        amount_b,
+                        tick_lower: None,
+                        tick_upper: None,
+                    })
+                }
+                _ => return Err(anyhow::anyhow!("Unexpected transaction type")),
+            },
+        })
+    }
+
+    fn convert_swap_data(&self, tx_data: &Value, pool_address: &str) -> Result<TransactionModel> {
+        let common_data = self.extract_common_data(tx_data)?;
+        let transaction_type = Self::determine_transaction_type(tx_data)?;
+
+        let (token_in, token_out, amount_in, amount_out) =
+            self.extract_swap_amounts(tx_data, pool_address, &transaction_type)?;
+
+        Ok(TransactionModel {
+            signature: common_data.signature,
+            pool_address: pool_address.to_string(),
+            block_time: common_data.block_time,
+            block_time_utc: common_data.block_time_utc,
+            transaction_type,
+            ready_for_backtesting: true,
+            data: TransactionData::Swap(SwapData {
+                token_in,
+                token_out,
+                amount_in,
+                amount_out,
+            }),
+        })
+    }
+
+    fn extract_swap_amounts(
+        &self,
+        tx_data: &Value,
+        pool_address: &str,
+        transaction_type: &str,
+    ) -> Result<(String, String, f64, f64)> {
+        let pre_balances = self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
+        let post_balances = self.get_token_balances(tx_data, "postTokenBalances", pool_address)?;
+
+        let (token_in, token_out) = if transaction_type == "TwoHopSwap" {
+            self.identify_two_hop_tokens(&pre_balances, &post_balances)?
+        } else {
+            (self.token_a_address.clone(), self.token_b_address.clone())
+        };
+
+        let amount_in = pre_balances.get(&token_in).copied().unwrap_or(0.0)
+            - post_balances.get(&token_in).copied().unwrap_or(0.0);
+        let amount_out = post_balances.get(&token_out).copied().unwrap_or(0.0)
+            - pre_balances.get(&token_out).copied().unwrap_or(0.0);
+
+        if amount_in > 0.0 && amount_out < 0.0 {
+            Ok((token_in, token_out, amount_in.abs(), amount_out.abs()))
+        } else if amount_in < 0.0 && amount_out > 0.0 {
+            Ok((token_out, token_in, amount_out.abs(), amount_in.abs()))
+        } else {
+            Err(anyhow::anyhow!("Unable to determine swap direction"))
+        }
+    }
+
+    fn identify_two_hop_tokens(
+        &self,
+        pre_balances: &HashMap<String, f64>,
+        post_balances: &HashMap<String, f64>,
+    ) -> Result<(String, String)> {
+        let token_in = pre_balances
+            .iter()
+            .find(|(_, &amount)| amount > 0.0)
+            .map(|(token, _)| token.clone())
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine input token"))?;
+
+        let token_out = post_balances
+            .iter()
+            .find(|(token, &amount)| amount > 0.0 && *token != token_in)
+            .map(|(token, _)| token.clone())
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine output token"))?;
+
+        Ok((token_in, token_out))
+    }
 }
 
 #[async_trait]
@@ -107,7 +318,7 @@ impl AMMService for OrcaStandardAMM {
         pool_address: &str,
         start_time: DateTime<Utc>,
         cursor: Cursor,
-    ) -> Result<Value> {
+    ) -> Result<Vec<Value>> {
         let signatures = self
             .fetch_signatures_with_retry(pool_address, SIGNATURE_BATCH_SIZE, cursor.as_deref())
             .await?;
@@ -129,7 +340,7 @@ impl AMMService for OrcaStandardAMM {
                 .await?;
 
             let futures = tx_data_batch.into_iter().map(|tx_data| async move {
-                if let Ok(_) = determine_transaction_type(&tx_data) {
+                if Self::determine_transaction_type(&tx_data).is_ok() {
                     Some(tx_data)
                 } else {
                     None
@@ -146,9 +357,28 @@ impl AMMService for OrcaStandardAMM {
     fn convert_data_to_transactions_model(
         &self,
         pool_address: &str,
-        tx_data: Value,
-    ) -> Vec<TransactionModel> {
-        vec![]
+        tx_data: &Value,
+    ) -> Result<Vec<TransactionModel>> {
+        let mut transactions = Vec::new();
+
+        match Self::determine_transaction_type(tx_data)?.as_str() {
+            "Swap" => {
+                if let Ok(swap_data) = self.convert_swap_data(tx_data, pool_address) {
+                    transactions.push(swap_data);
+                }
+            }
+            "IncreaseLiquidity"
+            | "DecreaseLiquidity"
+            | "IncreaseLiquidityV2"
+            | "DecreaseLiquidityV2" => {
+                if let Ok(liquidity_data) = self.convert_liquidity_data(tx_data, pool_address) {
+                    transactions.push(liquidity_data);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(transactions)
     }
 
     async fn fetch_and_insert_transactions(
@@ -197,59 +427,3 @@ impl AMMService for OrcaStandardAMM {
         Ok(())
     }
 }
-
-
-// Conversion logic
-
-// pub fn find_pool_balance_changes(
-//     json: &Value,
-//     pool_address: &str,
-//     token_a: &str,
-//     token_b: &str,
-// ) -> Result<(String, String, f64, f64)> {
-//     let pre_balances = get_token_balances(json, "preTokenBalances", pool_address)?;
-//     let post_balances = get_token_balances(json, "postTokenBalances", pool_address)?;
-
-//     let amount_a = calculate_amount_change(&pre_balances, &post_balances, token_a)?;
-//     let amount_b = calculate_amount_change(&pre_balances, &post_balances, token_b)?;
-
-//     Ok((token_a.to_string(), token_b.to_string(), amount_a, amount_b))
-// }
-
-// fn get_token_balances(
-//     json: &Value,
-//     balance_type: &str,
-//     pool_address: &str,
-// ) -> Result<HashMap<String, f64>> {
-//     let balances = json["meta"][balance_type]
-//         .as_array()
-//         .context(format!("Missing {}", balance_type))?;
-
-//     let mut result = HashMap::new();
-//     for balance in balances {
-//         if balance["owner"].as_str() == Some(pool_address) {
-//             let mint = balance["mint"]
-//                 .as_str()
-//                 .context("Missing mint")?
-//                 .to_string();
-
-//             let amount = balance["uiTokenAmount"]["uiAmount"]
-//                 .as_f64()
-//                 .context("Missing amount")?;
-
-//             result.insert(mint, amount);
-//         }
-//     }
-//     Ok(result)
-// }
-
-// fn calculate_amount_change(
-//     pre_balances: &HashMap<String, f64>,
-//     post_balances: &HashMap<String, f64>,
-//     token: &str,
-// ) -> Result<f64> {
-//     let pre_amount = pre_balances.get(token).copied().unwrap_or(0.0);
-//     let post_amount = post_balances.get(token).copied().unwrap_or(0.0);
-
-//     Ok(post_amount - pre_amount)
-// }

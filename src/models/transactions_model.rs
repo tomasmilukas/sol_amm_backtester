@@ -35,7 +35,6 @@ pub struct SwapData {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LiquidityData {
-    pub key_position: String,
     pub token_a: String,
     pub token_b: String,
     pub amount_a: f64,
