@@ -8,17 +8,24 @@ mod services;
 mod utils;
 
 use crate::{
-    api::{pool_api::PoolApi, transactions_api::TransactionApi},
+    api::pool_api::PoolApi,
     db::initialize_sol_amm_backtester_database,
-    repositories::{pool_repo::PoolRepo, transactions_repo::TransactionRepo},
-    services::{pool_service::PoolService, transactions_service::TransactionService},
+    repositories::pool_repo::PoolRepo,
+    services::{
+        pool_service::PoolService,
+        transactions_amm_service::{AMMPlatforms, AMMService},
+    },
 };
 
 use anyhow::Context;
+use api::transactions_api::TransactionApi;
 use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
+use repositories::transactions_repo::TransactionRepo;
+use services::transactions_amm_service::create_amm_service;
 use sqlx::postgres::PgPoolOptions;
+use std::{env, sync::Arc};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,21 +58,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tx_repo = TransactionRepo::new(pool);
     let tx_api = TransactionApi::new()?;
-    let tx_service = TransactionService::new(
+
+    let platform = env::var("POOL_PLATFORM")
+        .context("POOL_PLATFORM environment variable not set")?
+        .parse::<AMMPlatforms>()?;
+
+    let amm_service: Arc<dyn AMMService> = match create_amm_service(
+        platform,
         tx_repo,
         tx_api,
-        pool_data.token_a_address,
-        pool_data.token_b_address,
-    );
+        &pool_data.token_a_address,
+        &pool_data.token_b_address,
+        &pool_data.token_a_vault,
+        &pool_data.token_b_vault,
+    )
+    .await
+    {
+        Ok(service) => service,
+        Err(e) => {
+            panic!("Critical error: Failed to create AMM service: {}", e);
+        }
+    };
 
     // Sync transactions
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
-    match tx_service
+    match amm_service
         .sync_transactions(&config.pool_address, start_time, config.sync_mode)
         .await
     {
-        Ok(f) => println!("Synced transactions successfully"),
+        Ok(_f) => println!("Synced transactions successfully"),
         Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
 
