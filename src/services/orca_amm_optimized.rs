@@ -147,73 +147,35 @@ impl OrcaOptimizedAMM {
         let signature = tx["signature"].as_str()?.to_string();
         let instructions = tx["instructions"].as_array()?;
 
-        let mut open_position_data = None;
-        let mut increase_liquidity_data = None;
-
         for instruction in instructions {
             if let Some(name) = instruction["name"].as_str() {
-                match name {
-                    "openPositionWithMetadata" => {
-                        open_position_data = Some(instruction["payload"].clone());
-                    }
-                    "increaseLiquidity" => {
-                        increase_liquidity_data = Some(instruction["payload"].clone());
-                    }
+                return match name {
                     "swap" => {
-                        return Some(self.convert_swap(
-                            pool_address,
-                            &signature,
-                            instruction,
-                            block_time,
-                        ));
+                        Some(self.convert_swap(pool_address, &signature, instruction, block_time))
                     }
-                    "increaseLiquidityV2" => {
-                        return Some(self.convert_increase_liquidity_v2(
-                            pool_address,
-                            &signature,
-                            instruction,
-                            block_time,
-                        ));
-                    }
-                    "decreaseLiquidity" => {
-                        return Some(self.convert_decrease_liquidity(
-                            pool_address,
-                            &signature,
-                            instruction,
-                            block_time,
-                        ));
-                    }
-                    "decreaseLiquidityV2" => {
-                        return Some(self.convert_decrease_liquidity_v2(
-                            pool_address,
-                            &signature,
-                            instruction,
-                            block_time,
-                        ));
-                    }
-                    "twoHopSwap" => {
-                        return Some(self.convert_two_hop_swap(
-                            pool_address,
-                            &signature,
-                            instruction,
-                            block_time,
-                        ));
-                    }
-                    _ => {}
-                }
+                    "increaseLiquidity" | "increaseLiquidityV2" => Some(self.convert_liquidity(
+                        pool_address,
+                        &signature,
+                        instruction,
+                        block_time,
+                        true,
+                    )),
+                    "decreaseLiquidity" | "decreaseLiquidityV2" => Some(self.convert_liquidity(
+                        pool_address,
+                        &signature,
+                        instruction,
+                        block_time,
+                        false,
+                    )),
+                    "twoHopSwap" => Some(self.convert_two_hop_swap(
+                        pool_address,
+                        &signature,
+                        instruction,
+                        block_time,
+                    )),
+                    _ => None,
+                };
             }
-        }
-
-        if let (Some(open_data), Some(increase_data)) =
-            (open_position_data, increase_liquidity_data)
-        {
-            return Some(self.convert_increase_liquidity(
-                pool_address,
-                &signature,
-                &increase_data,
-                &open_data,
-                block_time_utc,
-            ));
         }
 
         None
@@ -262,157 +224,72 @@ impl OrcaOptimizedAMM {
         }
     }
 
-    fn convert_increase_liquidity(
-        &self,
-        pool_address: &str,
-        signature: &str,
-        increase_payload: &Value,
-        open_payload: &Value,
-        block_time: i64,
-    ) -> TransactionModel {
-        let payload = increase_payload["payload"].as_object().unwrap();
-        let tick_lower = open_payload["payload"]["dataTickLowerIndex"]
-            .as_i64()
-            .map(|t| t as u64);
-        let tick_upper = open_payload["payload"]["dataTickUpperIndex"]
-            .as_i64()
-            .map(|t| t as u64);
-
-        let key_position = payload["keyPosition"].as_str().unwrap_or("").to_string();
-
-        let (amount_a, amount_b) = self.match_token_amounts(
-            payload["keyTokenVaultA"].as_str().unwrap(),
-            payload["keyTokenVaultB"].as_str().unwrap(),
-            payload["transferAmount0"].as_str().unwrap_or("0"),
-            payload["transferAmount1"].as_str().unwrap_or("0"),
-        );
-
-        TransactionModel {
-            signature: signature.to_string(),
-            pool_address: pool_address.to_string(),
-            block_time,
-            block_time_utc: Utc.timestamp_opt(block_time, 0).unwrap(),
-            transaction_type: "IncreaseLiquidity".to_string(),
-            ready_for_backtesting: true,
-            data: TransactionData::IncreaseLiquidity(LiquidityData {
-                token_a: self.token_a_address.clone(),
-                token_b: self.token_b_address.clone(),
-                amount_a,
-                amount_b,
-                tick_lower,
-                tick_upper,
-                key_position: Some(key_position),
-            }),
-        }
-    }
-
-    fn convert_increase_liquidity_v2(
+    fn convert_liquidity(
         &self,
         pool_address: &str,
         signature: &str,
         instruction: &Value,
         block_time: i64,
+        is_increase: bool,
     ) -> TransactionModel {
         let payload = instruction["payload"].as_object().unwrap();
+        let is_v2 = instruction["name"].as_str().unwrap().ends_with("V2");
 
         let (amount_a, amount_b) = self.match_token_amounts(
             payload["keyTokenVaultA"].as_str().unwrap(),
             payload["keyTokenVaultB"].as_str().unwrap(),
-            payload["transfer0"]["amount"].as_str().unwrap_or("0"),
-            payload["transfer1"]["amount"].as_str().unwrap_or("0"),
+            self.get_transfer_amount(payload, "0", is_v2),
+            self.get_transfer_amount(payload, "1", is_v2),
         );
 
-        let key_position = payload["keyPosition"].as_str().unwrap_or("").to_string();
+        let transaction_type = format!(
+            "{}Liquidity",
+            if is_increase { "Increase" } else { "Decrease" },
+        );
 
         TransactionModel {
             signature: signature.to_string(),
             pool_address: pool_address.to_string(),
             block_time,
             block_time_utc: Utc.timestamp_opt(block_time, 0).unwrap(),
-            transaction_type: "IncreaseLiquidityV2".to_string(),
+            transaction_type,
             ready_for_backtesting: false,
-            data: TransactionData::IncreaseLiquidity(LiquidityData {
-                token_a: self.token_a_address.clone(),
-                token_b: self.token_b_address.clone(),
-                amount_a,
-                amount_b,
-                tick_lower: None,
-                tick_upper: None,
-                key_position: Some(key_position),
-            }),
+            data: if is_increase {
+                TransactionData::IncreaseLiquidity(LiquidityData {
+                    token_a: self.token_a_address.clone(),
+                    token_b: self.token_b_address.clone(),
+                    amount_a,
+                    amount_b,
+                    tick_lower: None,
+                    tick_upper: None,
+                })
+            } else {
+                TransactionData::DecreaseLiquidity(LiquidityData {
+                    token_a: self.token_a_address.clone(),
+                    token_b: self.token_b_address.clone(),
+                    amount_a,
+                    amount_b,
+                    tick_lower: None,
+                    tick_upper: None,
+                })
+            },
         }
     }
 
-    fn convert_decrease_liquidity(
+    fn get_transfer_amount(
         &self,
-        pool_address: &str,
-        signature: &str,
-        instruction: &Value,
-        block_time: i64,
-    ) -> TransactionModel {
-        let payload = instruction["payload"].as_object().unwrap();
-        let key_position = payload["keyPosition"].as_str().unwrap_or("").to_string();
-
-        let (amount_a, amount_b) = self.match_token_amounts(
-            payload["keyTokenVaultA"].as_str().unwrap(),
-            payload["keyTokenVaultB"].as_str().unwrap(),
-            payload["transferAmount0"].as_str().unwrap_or("0"),
-            payload["transferAmount1"].as_str().unwrap_or("0"),
-        );
-
-        TransactionModel {
-            signature: signature.to_string(),
-            pool_address: pool_address.to_string(),
-            block_time,
-            block_time_utc: Utc.timestamp_opt(block_time, 0).unwrap(),
-            transaction_type: "DecreaseLiquidity".to_string(),
-            ready_for_backtesting: false,
-            data: TransactionData::DecreaseLiquidity(LiquidityData {
-                token_a: self.token_a_address.clone(),
-                token_b: self.token_b_address.clone(),
-                amount_a,
-                amount_b,
-                tick_lower: None,
-                tick_upper: None,
-                key_position: Some(key_position),
-            }),
-        }
-    }
-
-    fn convert_decrease_liquidity_v2(
-        &self,
-        pool_address: &str,
-        signature: &str,
-        instruction: &Value,
-        block_time: i64,
-    ) -> TransactionModel {
-        let payload = instruction["payload"].as_object().unwrap();
-
-        let (amount_a, amount_b) = self.match_token_amounts(
-            payload["keyTokenVaultA"].as_str().unwrap(),
-            payload["keyTokenVaultB"].as_str().unwrap(),
-            payload["transfer0"]["amount"].as_str().unwrap_or("0"),
-            payload["transfer1"]["amount"].as_str().unwrap_or("0"),
-        );
-
-        let key_position = payload["keyPosition"].as_str().unwrap_or("").to_string();
-
-        TransactionModel {
-            signature: signature.to_string(),
-            pool_address: pool_address.to_string(),
-            block_time,
-            block_time_utc: Utc.timestamp_opt(block_time, 0).unwrap(),
-            transaction_type: "DecreaseLiquidityV2".to_string(),
-            ready_for_backtesting: false,
-            data: TransactionData::DecreaseLiquidity(LiquidityData {
-                token_a: self.token_a_address.clone(),
-                token_b: self.token_b_address.clone(),
-                amount_a,
-                amount_b,
-                tick_lower: None,
-                tick_upper: None,
-                key_position: Some(key_position),
-            }),
+        payload: &serde_json::Map<String, Value>,
+        index: &str,
+        is_v2: bool,
+    ) -> &str {
+        if is_v2 {
+            payload[format!("transfer{}", index)]["amount"]
+                .as_str()
+                .unwrap_or("0")
+        } else {
+            payload[format!("transferAmount{}", index)]
+                .as_str()
+                .unwrap_or("0")
         }
     }
 
