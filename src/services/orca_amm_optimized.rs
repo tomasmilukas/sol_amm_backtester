@@ -529,7 +529,7 @@ impl AMMService for OrcaOptimizedAMM {
         pool_address: &str,
         date: DateTime<Utc>,
         cursor: Cursor,
-    ) -> Result<Value> {
+    ) -> Result<Vec<Value>> {
         let url = self.construct_url(&date.and_hms(0, 0, 0))?;
         let response = self.http_client.get(&url).send().await?;
         if !response.status().is_success() {
@@ -543,7 +543,7 @@ impl AMMService for OrcaOptimizedAMM {
         let gz = GzDecoder::new(&bytes[..]);
         let mut stream = JsonStream::new(gz);
 
-        let mut relevant_blocks = Vec::new();
+        let mut relevant_blocks: Vec<Value> = Vec::new();
 
         while let Some(token) = stream.next()? {
             if let Token::ObjectStart = token {

@@ -47,7 +47,7 @@ pub trait AMMService: Send + Sync {
         pool_address: &str,
         start_time: DateTime<Utc>,
         cursor: Cursor,
-    ) -> Result<Value>;
+    ) -> Result<Vec<Value>>;
 
     fn convert_data_to_transactions_model(
         &self,
