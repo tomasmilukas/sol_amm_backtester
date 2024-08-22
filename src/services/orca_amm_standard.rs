@@ -50,6 +50,46 @@ impl OrcaStandardAMM {
         .await
         .map_err(|e| anyhow!("Failed to fetch signatures: {:?}", e))
     }
+
+    async fn fetch_transactions_with_retry(
+        &self,
+        pool_address: &str,
+        signatures: &[String],
+    ) -> Result<Vec<serde_json::Value>> {
+        retry_with_backoff(
+            || self.transaction_api.fetch_transaction_data(signatures),
+            constants::MAX_RETRIES,
+            constants::BASE_DELAY,
+            constants::MAX_DELAY,
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to fetch signatures: {:?}", e))
+    }
+
+    pub fn determine_transaction_type(json: &Value) -> Result<String> {
+        let log_messages = json["meta"]["logMessages"]
+            .as_array()
+            .context("Missing logMessages")?;
+
+        for message in log_messages {
+            let message = message.as_str().unwrap_or("");
+            if message.contains("Instruction: Swap") {
+                return Ok("Swap".to_string());
+            } else if message.contains("Instruction: TwoHopSwap") {
+                return Ok("TwoHopSwap".to_string());
+            } else if message.contains("Instruction: IncreaseLiquidity") {
+                return Ok("IncreaseLiquidity".to_string());
+            } else if message.contains("Instruction: IncreaseLiquidityV2") {
+                return Ok("IncreaseLiquidityV2".to_string());
+            } else if message.contains("Instruction: DecreaseLiquidity") {
+                return Ok("DecreaseLiquidity".to_string());
+            } else if message.contains("Instruction: DecreaseLiquidityV2") {
+                return Ok("DecreaseLiquidityV2".to_string());
+            }
+        }
+
+        Err(anyhow!("Unable to determine transaction type"))
+    }
 }
 
 #[async_trait]
@@ -68,17 +108,39 @@ impl AMMService for OrcaStandardAMM {
         start_time: DateTime<Utc>,
         cursor: Cursor,
     ) -> Result<Value> {
-        // Main logic separation for the JSON URL thing. Make hte optimized fn in the other Orca implementation and the check url health which is a constant at the top.
-        // In the other else just use the standard fetch signatures and then batch fetch tx data. then convert the batch with the arrays.
+        let signatures = self
+            .fetch_signatures_with_retry(pool_address, SIGNATURE_BATCH_SIZE, cursor.as_deref())
+            .await?;
 
-        // Remember! The conversion is different for the optimized txs since their shape is different. so the "set" optimization bool that you will use must be used there too when
-        // you are converting the raw data to the transactions model.
+        let filtered_signatures: Vec<SignatureInfo> = signatures
+            .into_iter()
+            .filter(|sig| sig.err.is_none())
+            .collect();
 
-        // Dont forget to adjust the liquidity data to support the lower and upper tick since u missed that!
-        // Also dont forget to add notes for raydium tx conversions. Its fine to have some duplicate code for the fetching sigs and tx.
-        // But the conversion will be completely different!
+        let mut all_relevant_transactions = Vec::new();
 
-        todo!("Implement fetch_transactions for OrcaAMM")
+        // Process transactions in batches of 10
+        for chunk in filtered_signatures.chunks(10) {
+            let signature_strings: Vec<String> =
+                chunk.iter().map(|sig| sig.signature.clone()).collect();
+
+            let tx_data_batch = self
+                .fetch_transactions_with_retry(pool_address, &signature_strings)
+                .await?;
+
+            let futures = tx_data_batch.into_iter().map(|tx_data| async move {
+                if let Ok(_) = determine_transaction_type(&tx_data) {
+                    Some(tx_data)
+                } else {
+                    None
+                }
+            });
+
+            let batch_results = join_all(futures).await;
+            all_relevant_transactions.extend(batch_results.into_iter().filter_map(|x| x));
+        }
+
+        Ok(all_relevant_transactions)
     }
 
     fn convert_data_to_transactions_model(
@@ -95,23 +157,99 @@ impl AMMService for OrcaStandardAMM {
         start_time: DateTime<Utc>,
         latest_db_transaction: Option<TransactionModel>,
     ) -> Result<()> {
-        let mut cursor = Cursor::OptionalSignature(None);
+        let mut cursor = if let Some(latest_tx) = latest_db_transaction {
+            Cursor::OptionalSignature(Some(latest_tx.signature))
+        } else {
+            Cursor::OptionalSignature(None)
+        };
 
-        if Some(&latest_db_transaction).is_some() {
-            cursor = Cursor::OptionalSignature(Some(latest_db_transaction.unwrap().signature))
+        loop {
+            let transactions = self
+                .fetch_transactions(pool_address, start_time, cursor)
+                .await?;
+
+            println!("Processing {} transactions", transactions.len());
+
+            let transaction_models =
+                self.convert_data_to_transactions_model(pool_address, transactions.clone());
+
+            self.insert_transactions(transaction_models).await?;
+
+            // Update cursor for the next iteration
+            if let Some(last_transaction) = transactions.last() {
+                if let Some(signature) = last_transaction["transaction"]["signatures"].get(0) {
+                    cursor =
+                        Cursor::OptionalSignature(Some(signature.as_str().unwrap().to_string()));
+                }
+            }
+
+            // Check if we've reached or gone past the start_time
+            if let Some(first_transaction) = transactions.first() {
+                let block_time = first_transaction["blockTime"].as_i64().unwrap_or(0);
+                let transaction_time = Utc.timestamp_opt(block_time, 0).unwrap();
+                if transaction_time <= start_time {
+                    println!("Reached start_time limit. Exiting.");
+                    break;
+                }
+            }
         }
 
-        // REMEMBER THIS MUST BE LOOPED! IT WILL RUN UP UNTIL THE START_TIME IS REACHED. CHECK OG CODE.
-        // THIS MUST BE ON EVERY AMM IMPLEMENTATION SINCE THEIR CURSOR UPDATES WORKED DIFFERENTLY ETC.
-
-        // fetch transactions must give back a cursor to pass on next!!!!
-
-        let data = self
-            .fetch_transactions(pool_address, start_time, cursor)
-            .await?;
-
-        let transactions = self.convert_data_to_transactions_model(pool_address, data);
-
-        self.insert_transactions(transactions).await
+        Ok(())
     }
 }
+
+
+// Conversion logic
+
+// pub fn find_pool_balance_changes(
+//     json: &Value,
+//     pool_address: &str,
+//     token_a: &str,
+//     token_b: &str,
+// ) -> Result<(String, String, f64, f64)> {
+//     let pre_balances = get_token_balances(json, "preTokenBalances", pool_address)?;
+//     let post_balances = get_token_balances(json, "postTokenBalances", pool_address)?;
+
+//     let amount_a = calculate_amount_change(&pre_balances, &post_balances, token_a)?;
+//     let amount_b = calculate_amount_change(&pre_balances, &post_balances, token_b)?;
+
+//     Ok((token_a.to_string(), token_b.to_string(), amount_a, amount_b))
+// }
+
+// fn get_token_balances(
+//     json: &Value,
+//     balance_type: &str,
+//     pool_address: &str,
+// ) -> Result<HashMap<String, f64>> {
+//     let balances = json["meta"][balance_type]
+//         .as_array()
+//         .context(format!("Missing {}", balance_type))?;
+
+//     let mut result = HashMap::new();
+//     for balance in balances {
+//         if balance["owner"].as_str() == Some(pool_address) {
+//             let mint = balance["mint"]
+//                 .as_str()
+//                 .context("Missing mint")?
+//                 .to_string();
+
+//             let amount = balance["uiTokenAmount"]["uiAmount"]
+//                 .as_f64()
+//                 .context("Missing amount")?;
+
+//             result.insert(mint, amount);
+//         }
+//     }
+//     Ok(result)
+// }
+
+// fn calculate_amount_change(
+//     pre_balances: &HashMap<String, f64>,
+//     post_balances: &HashMap<String, f64>,
+//     token: &str,
+// ) -> Result<f64> {
+//     let pre_amount = pre_balances.get(token).copied().unwrap_or(0.0);
+//     let post_amount = post_balances.get(token).copied().unwrap_or(0.0);
+
+//     Ok(post_amount - pre_amount)
+// }
