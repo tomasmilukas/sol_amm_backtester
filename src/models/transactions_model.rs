@@ -9,7 +9,7 @@ use crate::utils::transaction_utils;
 pub struct TransactionModel {
     pub signature: String,
     pub pool_address: String,
-    // Block time utc for ORCA OPTIMIZED will have incorrect times, but correct dates.
+    pub block_time: i64,
     pub block_time_utc: DateTime<Utc>,
     pub transaction_type: String,
     pub ready_for_backtesting: bool,
@@ -48,16 +48,19 @@ impl TransactionModel {
     pub fn new(
         signature: String,
         pool_address: String,
+        block_time: i64,
         block_time_utc: DateTime<Utc>,
         transaction_type: String,
+        ready_for_backtesting: bool,
         data: TransactionData,
     ) -> Self {
         Self {
             signature,
             pool_address,
+            block_time,
             block_time_utc,
             transaction_type,
-            ready_for_backtesting: false,
+            ready_for_backtesting,
             data,
         }
     }

@@ -67,14 +67,6 @@ impl AMMService for RaydiumAMM {
         start_time: DateTime<Utc>,
         end_cursor: Option<String>,
     ) -> Result<Value> {
-        // Main logic separation for the JSON URL thing. Make hte optimized fn in the other Orca implementation and the check url health which is a constant at the top.
-        // Make sure to check the url health ONCE and set it as bool and use that for the if/else.
-        // In the other else just use the standard fetch signatures and then batch fetch tx data. then convert the batch with the arrays.
-
-        // Remember! The conversion is different for the optimized txs since their shape is different. so the "set" optimization bool that you will use must be used there too when
-        // you are converting the raw data to the transactions model.
-
-        // Dont forget to adjust the liquidity data to support the lower and upper tick since u missed that!
         // Also dont forget to add notes for raydium tx conversions. Its fine to have some duplicate code for the fetching sigs and tx.
         // But the conversion will be completely different!
 
