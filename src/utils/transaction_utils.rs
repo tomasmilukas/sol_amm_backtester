@@ -1,6 +1,5 @@
-use anyhow::{anyhow, Context, Result};
-use serde_json::Value;
-use std::{collections::HashMap, str::FromStr};
+use anyhow::{anyhow, Result};
+use std::str::FromStr;
 use tokio::time::Duration;
 use tokio_retry::{
     strategy::{jitter, ExponentialBackoff},

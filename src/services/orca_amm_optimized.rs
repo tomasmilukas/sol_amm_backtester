@@ -1,16 +1,18 @@
+use std::io::{BufRead, Read};
 use std::time::Duration as stdDuration;
 
 use crate::api::transactions_api::TransactionApi;
-use crate::models::transactions_model::TransactionModel;
+use crate::models::transactions_model::{
+    LiquidityData, SwapData, TransactionData, TransactionModel,
+};
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_amm_service::AMMService;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, Duration, TimeDelta, TimeZone, Utc};
 use flate2::bufread::GzDecoder;
 use reqwest::Client;
-use serde_json::{from_str, Value};
-use std::io::{BufRead, BufReader};
+use serde_json::{json, Value};
 
 use super::transactions_amm_service::constants::ORCA_OPTIMIZED_PATH_BASE_URL;
 use super::transactions_amm_service::Cursor;
@@ -63,49 +65,44 @@ impl OrcaOptimizedAMM {
         ))
     }
 
-    fn parse_block(
-        &self,
-        stream: &mut JsonStream<GzDecoder<&[u8]>>,
-        pool_address: &str,
-    ) -> Result<Option<Value>> {
-        let mut block = json!({
-            "slot": null,
-            "blockHeight": null,
-            "blockTime": null,
-            "transactions": []
-        });
+    fn parse_blocks<R: BufRead>(&self, reader: R, pool_address: &str) -> Result<Vec<Value>> {
+        let gz = GzDecoder::new(reader);
+        let buf_reader = std::io::BufReader::new(gz);
+        let mut relevant_blocks = Vec::new();
+        let mut buffer = Vec::new();
+        let mut depth = 0;
 
-        while let Some(token) = stream.next()? {
-            match token {
-                Token::ObjectEnd => break,
-                Token::PropertyName(name) => {
-                    let value = stream.parse_next_value()?;
-                    if name == "transactions" {
-                        if let Value::Array(transactions) = value {
-                            let relevant_txs = transactions
-                                .into_iter()
+        for byte in buf_reader.bytes() {
+            let byte = byte?;
+            buffer.push(byte);
+            match byte as char {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        // We've reached the end of a complete JSON object
+                        let block: Value = serde_json::from_slice(&buffer)?;
+                        if let Some(transactions) = block["transactions"].as_array() {
+                            let relevant_txs: Vec<Value> = transactions
+                                .iter()
                                 .filter(|tx| self.is_relevant_transaction(tx, pool_address))
+                                .cloned()
                                 .collect();
 
                             if !relevant_txs.is_empty() {
-                                block["transactions"] = json!(relevant_txs);
-                            } else {
-                                return Ok(None); // No relevant transactions in this block
+                                let mut relevant_block = block.clone();
+                                relevant_block["transactions"] = json!(relevant_txs);
+                                relevant_blocks.push(relevant_block);
                             }
                         }
-                    } else {
-                        block[name] = value;
+                        buffer.clear();
                     }
                 }
                 _ => {}
             }
         }
 
-        if block["transactions"].as_array().unwrap().is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(block))
-        }
+        Ok(relevant_blocks)
     }
 
     fn is_relevant_transaction(&self, tx: &Value, pool_address: &str) -> bool {
@@ -115,9 +112,8 @@ impl OrcaOptimizedAMM {
             .flat_map(|instructions| instructions.iter())
             .any(|instruction| {
                 let name = instruction["name"].as_str().unwrap_or("");
-                let payload = instruction["payload"]
-                    .as_object()
-                    .unwrap_or(&serde_json::Map::new());
+                let empty_map = serde_json::Map::new();
+                let payload = instruction["payload"].as_object().unwrap_or(&empty_map);
 
                 matches!(
                     name,
@@ -167,12 +163,9 @@ impl OrcaOptimizedAMM {
                         block_time,
                         false,
                     )),
-                    "twoHopSwap" => Some(self.convert_two_hop_swap(
-                        pool_address,
-                        &signature,
-                        instruction,
-                        block_time,
-                    )),
+                    "twoHopSwap" => {
+                        self.convert_two_hop_swap(pool_address, &signature, instruction, block_time)
+                    }
                     _ => None,
                 };
             }
@@ -238,8 +231,8 @@ impl OrcaOptimizedAMM {
         let (amount_a, amount_b) = self.match_token_amounts(
             payload["keyTokenVaultA"].as_str().unwrap(),
             payload["keyTokenVaultB"].as_str().unwrap(),
-            self.get_transfer_amount(payload, "0", is_v2),
-            self.get_transfer_amount(payload, "1", is_v2),
+            &self.get_transfer_amount(payload, "0", is_v2),
+            &self.get_transfer_amount(payload, "1", is_v2),
         );
 
         let transaction_type = format!(
@@ -281,16 +274,19 @@ impl OrcaOptimizedAMM {
         payload: &serde_json::Map<String, Value>,
         index: &str,
         is_v2: bool,
-    ) -> &str {
-        if is_v2 {
-            payload[format!("transfer{}", index)]["amount"]
-                .as_str()
-                .unwrap_or("0")
+    ) -> String {
+        let key = if is_v2 {
+            format!("transfer{}", index)
         } else {
-            payload[format!("transferAmount{}", index)]
-                .as_str()
-                .unwrap_or("0")
-        }
+            format!("transferAmount{}", index)
+        };
+
+        payload
+            .get(&key)
+            .and_then(|v| v.get("amount"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("0")
+            .to_string()
     }
 
     fn convert_two_hop_swap(
@@ -302,7 +298,7 @@ impl OrcaOptimizedAMM {
     ) -> Option<TransactionModel> {
         let payload = instruction["payload"].as_object().unwrap();
 
-        let (whirlpool_key, vault_a_key, vault_b_key, amount_in_key, amount_out_key) =
+        let (whirlpool_key, vault_a_key, _vault_b_key, amount_in_key, amount_out_key) =
             if payload["keyWhirlpoolOne"].as_str() == Some(pool_address) {
                 (
                     "keyWhirlpoolOne",
@@ -324,7 +320,6 @@ impl OrcaOptimizedAMM {
             };
 
         let vault_a = payload[vault_a_key].as_str().unwrap();
-        let vault_b = payload[vault_b_key].as_str().unwrap();
 
         let amount_in = payload[amount_in_key]
             .as_str()
@@ -343,18 +338,13 @@ impl OrcaOptimizedAMM {
             payload["dataAToBTwo"].as_i64().unwrap_or(0) == 1
         };
 
-        let (token_in, token_out) = if vault_a == self.token_a_vault {
-            if a_to_b {
-                (self.token_a_address.clone(), self.token_b_address.clone())
-            } else {
-                (self.token_b_address.clone(), self.token_a_address.clone())
-            }
+        let is_a_vault = vault_a == self.token_a_vault;
+        let swap_tokens = is_a_vault ^ a_to_b;
+
+        let (token_in, token_out) = if swap_tokens {
+            (self.token_b_address.clone(), self.token_a_address.clone())
         } else {
-            if a_to_b {
-                (self.token_b_address.clone(), self.token_a_address.clone())
-            } else {
-                (self.token_a_address.clone(), self.token_b_address.clone())
-            }
+            (self.token_a_address.clone(), self.token_b_address.clone())
         };
 
         Some(TransactionModel {
@@ -364,7 +354,7 @@ impl OrcaOptimizedAMM {
             block_time_utc: Utc.timestamp_opt(block_time, 0).unwrap(),
             transaction_type: "TwoHopSwap".to_string(),
             ready_for_backtesting: false,
-            data: TransactionData::TwoHopSwap(TwoHopSwapData {
+            data: TransactionData::Swap(SwapData {
                 amount_in,
                 amount_out,
                 token_in,
@@ -401,14 +391,15 @@ impl AMMService for OrcaOptimizedAMM {
         &self.transaction_api
     }
 
-    async fn fetch_transactions(
-        &self,
-        pool_address: &str,
-        date: DateTime<Utc>,
-        cursor: Cursor,
-    ) -> Result<Vec<Value>> {
-        let url = self.construct_url(&date.and_hms(0, 0, 0))?;
+    async fn fetch_transactions(&self, pool_address: &str, cursor: Cursor) -> Result<Vec<Value>> {
+        let date: Option<DateTime<Utc>> = match cursor {
+            Cursor::DateTime(date) => Some(date),
+            Cursor::OptionalSignature(_) => None,
+        };
+
+        let url = self.construct_url(&date.ok_or_else(|| anyhow!("Wrong cursor"))?)?;
         let response = self.http_client.get(&url).send().await?;
+
         if !response.status().is_success() {
             return Err(anyhow!(
                 "Failed to download file: HTTP {}",
@@ -417,20 +408,7 @@ impl AMMService for OrcaOptimizedAMM {
         }
 
         let bytes = response.bytes().await?;
-        let gz = GzDecoder::new(&bytes[..]);
-        let mut stream = JsonStream::new(gz);
-
-        let mut relevant_blocks: Vec<Value> = Vec::new();
-
-        while let Some(token) = stream.next()? {
-            if let Token::ObjectStart = token {
-                if let Some(block) = self.parse_block(&mut stream, pool_address)? {
-                    relevant_blocks.push(block);
-                }
-            }
-        }
-
-        Ok(relevant_blocks)
+        self.parse_blocks(&bytes[..], pool_address)
     }
 
     async fn fetch_and_insert_transactions(
@@ -439,39 +417,64 @@ impl AMMService for OrcaOptimizedAMM {
         start_time: DateTime<Utc>,
         latest_db_transaction: Option<TransactionModel>,
     ) -> Result<()> {
-        let mut current_date = Utc::now().date().pred(); // Start with yesterday
-        let start_date = start_time.date();
+        let yesterday = Utc::now().date() - Duration::days(1);
+        let mut current_date = if let Some(latest_tx) = latest_db_transaction {
+            latest_tx.block_time_utc.date()
+        } else {
+            yesterday
+        };
 
-        while current_date >= start_date {
-            // Cursor not used, passed as place holder due to trait format.
-            let data = self
-                .fetch_transactions(pool_address, current_date, Cursor::OptionalSignature(None))
-                .await?;
+        while current_date >= start_time.date() {
+            let cursor = Cursor::DateTime(current_date.and_hms(0, 0, 0));
 
-            let transactions = self.convert_data_to_transactions_model(pool_address, data);
+            let transactions = self.fetch_transactions(pool_address, cursor).await?;
 
-            self.insert_transactions(transactions).await?;
+            if transactions.is_empty() {
+                println!(
+                    "No transactions for {}. Moving to previous day.",
+                    current_date
+                );
+                current_date -= Duration::days(1);
+
+                continue;
+            }
+
+            println!("Processing transactions for {}", current_date);
+
+            let transaction_models =
+                self.convert_data_to_transactions_model(pool_address, transactions)?;
+
+            self.insert_transactions(transaction_models).await?;
 
             // Move to the previous day
-            current_date = current_date.pred();
+            current_date -= Duration::days(1);
         }
 
+        println!("Reached or passed start_time {}. Exiting.", start_time);
         Ok(())
     }
 
     fn convert_data_to_transactions_model(
         &self,
         pool_address: &str,
-        tx_data: Value,
-    ) -> Vec<TransactionModel> {
-        let block_time = block["blockTime"].as_i64().unwrap_or(0);
-        let block_time_utc = Utc.timestamp_opt(block_time, 0).unwrap();
+        blocks: Vec<Value>,
+    ) -> Result<Vec<TransactionModel>> {
+        let mut all_transactions = Vec::new();
 
-        block["transactions"]
-            .as_array()
-            .unwrap_or(&Vec::new())
-            .iter()
-            .filter_map(|tx| self.convert_single_transaction(tx, block_time_utc, pool_address))
-            .collect()
+        for block in blocks {
+            let block_time = block["blockTime"].as_i64().unwrap_or(0);
+
+            if let Some(transactions) = block["transactions"].as_array() {
+                for tx in transactions {
+                    if let Some(transaction_model) =
+                        self.convert_single_transaction(tx, block_time, pool_address)
+                    {
+                        all_transactions.push(transaction_model);
+                    }
+                }
+            }
+        }
+
+        Ok(all_transactions)
     }
 }

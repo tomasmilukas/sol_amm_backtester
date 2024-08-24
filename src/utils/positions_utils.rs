@@ -1,4 +1,6 @@
-fn clean_address(address: &str) -> String {
+use regex::Regex;
+
+pub fn clean_address(address: &str) -> String {
     // Remove emojis and other special characters
     let re = Regex::new(r"[^\w\s]").unwrap();
     let cleaned = re.replace_all(address, "");

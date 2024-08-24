@@ -16,16 +16,15 @@ impl TransactionRepo {
     }
 
     pub async fn insert(&self, transaction: &TransactionModel) -> Result<()> {
-        let result = sqlx::query(
+        let _ = sqlx::query(
             r#"
-            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, slot, transaction_type, data)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, data)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (signature) 
             DO UPDATE SET 
                 pool_address = EXCLUDED.pool_address,
                 block_time = EXCLUDED.block_time,
                 block_time_utc = EXCLUDED.block_time_utc,
-                slot = EXCLUDED.slot,
                 transaction_type = EXCLUDED.transaction_type,
                 data = EXCLUDED.data
             "#
@@ -34,7 +33,6 @@ impl TransactionRepo {
         .bind(&transaction.pool_address)
         .bind(transaction.block_time)
         .bind(transaction.block_time_utc)
-        .bind(transaction.slot)
         .bind(&transaction.transaction_type)
         .bind(&serde_json::to_value(transaction)?)
         .execute(&self.pool)
@@ -111,7 +109,7 @@ impl TransactionRepo {
                 let pool_address: String = row.get("pool_address");
                 let block_time: i64 = row.get("block_time");
                 let block_time_utc: DateTime<Utc> = row.get("block_time_utc");
-                let slot: i64 = row.get("slot");
+                let ready_for_backtesting = row.get("ready_for_backtesting");
                 let transaction_type = row.get("transaction_type");
                 let data_json: Value = row.get("data");
 
@@ -128,8 +126,8 @@ impl TransactionRepo {
                     pool_address,
                     block_time,
                     block_time_utc,
-                    slot,
                     transaction_type,
+                    ready_for_backtesting,
                     transaction_data,
                 );
 
@@ -144,7 +142,6 @@ impl TransactionRepo {
             pool_address: row.get("pool_address"),
             block_time: row.get("block_time"),
             block_time_utc: row.get("block_time_utc"),
-            slot: row.get("slot"),
             transaction_type: row.get("transaction_type"),
             ready_for_backtesting: row.get("ready_for_backtesting"),
             data: serde_json::from_value(row.get("transaction_data"))

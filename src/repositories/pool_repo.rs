@@ -1,6 +1,8 @@
 use crate::models::pool_model::PoolModel;
+use chrono::Utc;
 use sqlx::{query, query_as, Pool, Postgres};
 
+#[derive(Clone)]
 pub struct PoolRepo {
     db: Pool<Postgres>,
 }
@@ -42,7 +44,6 @@ impl PoolRepo {
         .bind(pool.token_b_decimals)
         .bind(pool.tick_spacing)
         .bind(pool.fee_rate)
-        .bind(pool.created_at)
         .bind(pool.last_updated_at)
         .execute(&self.db)
         .await?;

@@ -1,6 +1,5 @@
 use crate::models::positions_model::PositionModel;
-use chrono::Utc;
-use sqlx::{query, query_as, Pool, Postgres};
+use sqlx::{query_as, Pool, Postgres, Transaction};
 
 pub struct PositionsRepo {
     db: Pool<Postgres>,
@@ -11,13 +10,14 @@ impl PositionsRepo {
         Self { db }
     }
 
-    pub async fn begin_transaction(&self) -> Result<Transaction<'static, Postgres>> {
-        self.db.begin().await.context("Failed to begin transaction")
+    pub async fn begin_transaction(&self) -> sqlx::Result<Transaction<'static, Postgres>> {
+        self.db.begin().await
     }
 
     pub async fn upsert_in_transaction<'a>(
         &self,
         transaction: &mut Transaction<'a, Postgres>,
+        pool_address: &str,
         position: &PositionModel,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -39,7 +39,7 @@ impl PositionsRepo {
             "#,
         )
         .bind(&position.address)
-        .bind(&position.pool_address)
+        .bind(&pool_address)
         .bind(position.liquidity)
         .bind(position.tick_lower)
         .bind(position.tick_upper)
