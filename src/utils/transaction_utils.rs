@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::fmt;
 use std::str::FromStr;
 use tokio::time::Duration;
 use tokio_retry::{
@@ -38,6 +39,15 @@ impl FromStr for AMMPlatforms {
             "RAYDIUM" => Ok(AMMPlatforms::Raydium),
             // Add other platforms as needed
             _ => Err(anyhow!("Unknown platform: {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for AMMPlatforms {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            AMMPlatforms::Orca => write!(f, "ORCA"),
+            AMMPlatforms::Raydium => write!(f, "RAYDIUM"),
         }
     }
 }
