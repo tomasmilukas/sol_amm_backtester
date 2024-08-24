@@ -1,6 +1,6 @@
 use crate::models::positions_model::PositionModel;
-use sqlx::{query, query_as, Pool, Postgres};
 use chrono::Utc;
+use sqlx::{query, query_as, Pool, Postgres};
 
 pub struct PositionsRepo {
     db: Pool<Postgres>,
@@ -11,8 +11,16 @@ impl PositionsRepo {
         Self { db }
     }
 
-    pub async fn upsert(&self, position: &PositionModel) -> Result<(), sqlx::Error> {
-        query(
+    pub async fn begin_transaction(&self) -> Result<Transaction<'static, Postgres>> {
+        self.db.begin().await.context("Failed to begin transaction")
+    }
+
+    pub async fn upsert_in_transaction<'a>(
+        &self,
+        transaction: &mut Transaction<'a, Postgres>,
+        position: &PositionModel,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
             r#"
             INSERT INTO positions (
                 address, pool_address, liquidity, tick_lower, tick_upper,
@@ -20,7 +28,10 @@ impl PositionsRepo {
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (address) DO UPDATE SET
+                pool_address = EXCLUDED.pool_address,
                 liquidity = EXCLUDED.liquidity,
+                tick_lower = EXCLUDED.tick_lower,
+                tick_upper = EXCLUDED.tick_upper,
                 token_a_amount = EXCLUDED.token_a_amount,
                 token_b_amount = EXCLUDED.token_b_amount,
                 time_scraped_at = EXCLUDED.time_scraped_at,
@@ -35,7 +46,7 @@ impl PositionsRepo {
         .bind(position.token_a_amount)
         .bind(position.token_b_amount)
         .bind(position.time_scraped_at)
-        .execute(&self.db)
+        .execute(transaction)
         .await?;
 
         Ok(())

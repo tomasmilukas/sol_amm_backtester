@@ -15,6 +15,7 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             token_a_decimals SMALLINT NOT NULL,
             token_b_decimals SMALLINT NOT NULL,
             tick_spacing SMALLINT NOT NULL,
+            total_liquidity BIGINT,
             fee_rate SMALLINT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

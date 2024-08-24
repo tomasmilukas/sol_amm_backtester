@@ -74,6 +74,7 @@ impl PoolModel {
             token_a_vault,
             token_b_vault,
             tick_spacing,
+            total_liquidity: None,
             fee_rate,
             last_updated_at: chrono::Utc::now(),
         }
