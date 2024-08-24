@@ -16,9 +16,9 @@ impl PoolRepo {
             INSERT INTO pools (
                 address, name, token_a_name, token_b_name, 
                 token_a_address, token_b_address, token_a_decimals, token_b_decimals, 
-                tick_spacing, fee_rate, created_at, last_updated_at
+                tick_spacing, fee_rate, last_updated_at
             ) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (address) DO UPDATE SET
                 name = EXCLUDED.name,
                 token_a_name = EXCLUDED.token_a_name,
