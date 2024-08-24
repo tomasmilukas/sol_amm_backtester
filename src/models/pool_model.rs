@@ -42,8 +42,8 @@ pub struct PoolModel {
     pub token_a_decimals: i16,
     pub token_b_decimals: i16,
     pub tick_spacing: i16,
+    pub total_liquidity: Option<i64>,
     pub fee_rate: i16,
-    pub created_at: DateTime<Utc>,
     pub last_updated_at: DateTime<Utc>,
 }
 
@@ -75,7 +75,6 @@ impl PoolModel {
             token_b_vault,
             tick_spacing,
             fee_rate,
-            created_at: chrono::Utc::now(),
             last_updated_at: chrono::Utc::now(),
         }
     }
