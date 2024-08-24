@@ -5,9 +5,10 @@ use crate::services::transactions_amm_service::{constants, AMMService};
 use crate::utils::transaction_utils::retry_with_backoff;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
-use futures::future::join_all;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
+
+use super::transactions_amm_service::Cursor;
 
 pub struct RaydiumAMM {
     transaction_repo: TransactionRepo,
@@ -64,9 +65,8 @@ impl AMMService for RaydiumAMM {
     async fn fetch_transactions(
         &self,
         pool_address: &str,
-        start_time: DateTime<Utc>,
-        end_cursor: Option<String>,
-    ) -> Result<Value> {
+        end_cursor: Cursor,
+    ) -> Result<Vec<Value>> {
         // Also dont forget to add notes for raydium tx conversions. Its fine to have some duplicate code for the fetching sigs and tx.
         // But the conversion will be completely different!
 
@@ -76,8 +76,19 @@ impl AMMService for RaydiumAMM {
     fn convert_data_to_transactions_model(
         &self,
         pool_address: &str,
-        tx_data: Value,
-    ) -> Vec<TransactionModel> {
+        tx_data: Vec<Value>,
+    ) -> Result<Vec<TransactionModel>> {
+        // Implement the conversion logic here
+        // This is a placeholder and should be replaced with actual conversion logic
+        todo!("Implement fetch_transactions for OrcaAMM")
+    }
+
+    async fn fetch_and_insert_transactions(
+        &self,
+        pool_address: &str,
+        start_time: DateTime<Utc>,
+        latest_db_transaction: Option<TransactionModel>,
+    ) -> Result<()> {
         // Implement the conversion logic here
         // This is a placeholder and should be replaced with actual conversion logic
         todo!("Implement fetch_transactions for OrcaAMM")

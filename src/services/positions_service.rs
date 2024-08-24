@@ -1,11 +1,7 @@
-use crate::api::pool_api::PoolApi;
-use crate::api::positions_api::PositionsApi;
-use crate::models::pool_model::{PoolModel, Whirlpool};
 use crate::repositories::pool_repo::PoolRepo;
 use crate::repositories::positions_repo::PositionsRepo;
-use crate::utils::decode::decode_whirlpool;
-use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose, Engine as _};
+use crate::{api::positions_api::PositionsApi, models::positions_model::PositionModel};
+use anyhow::{Context, Result};
 
 pub struct PositionsService {
     positions_repo: PositionsRepo,
@@ -49,14 +45,14 @@ impl PositionsService {
             .context("Failed to parse liquidity as i64")?;
 
         self.pool_repo
-            .update_liquidity_in_transaction(&mut transaction, pool_address, liquidity)
+            .update_liquidity(pool_address, liquidity)
             .await
             .context("Failed to update pool liquidity")?;
 
         // Upsert positions within the transaction
         for position in positions {
             self.positions_repo
-                .upsert_in_transaction(&mut transaction, &position)
+                .upsert_in_transaction(&mut transaction, pool_address, &position)
                 .await
                 .with_context(|| format!("Failed to upsert position: {}", position.address))?;
         }

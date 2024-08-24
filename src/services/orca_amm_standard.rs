@@ -1,13 +1,19 @@
+use std::collections::HashMap;
+
 use crate::api::transactions_api::{SignatureInfo, TransactionApi};
-use crate::models::transactions_model::TransactionModel;
+use crate::models::transactions_model::{
+    LiquidityData, SwapData, TransactionData, TransactionModel,
+};
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_amm_service::{constants, AMMService};
 use crate::utils::transaction_utils::retry_with_backoff;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
+use futures::future::join_all;
 use serde_json::Value;
 
+use super::transactions_amm_service::constants::SIGNATURE_BATCH_SIZE;
 use super::transactions_amm_service::Cursor;
 
 pub struct OrcaStandardAMM {
@@ -15,6 +21,14 @@ pub struct OrcaStandardAMM {
     transaction_api: TransactionApi,
     token_a_address: String,
     token_b_address: String,
+}
+
+struct CommonTransactionData {
+    signature: String,
+    block_time: i64,
+    block_time_utc: DateTime<Utc>,
+    amount_a: f64,
+    amount_b: f64,
 }
 
 impl OrcaStandardAMM {
@@ -51,9 +65,8 @@ impl OrcaStandardAMM {
         .map_err(|e| anyhow!("Failed to fetch signatures: {:?}", e))
     }
 
-    async fn fetch_transactions_with_retry(
+    async fn fetch_transactions_from_signatures(
         &self,
-        pool_address: &str,
         signatures: &[String],
     ) -> Result<Vec<serde_json::Value>> {
         retry_with_backoff(
@@ -69,7 +82,7 @@ impl OrcaStandardAMM {
     pub fn determine_transaction_type(json: &Value) -> Result<String> {
         let log_messages = json["meta"]["logMessages"]
             .as_array()
-            .context("Missing logMessages")?;
+            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
 
         for message in log_messages {
             let message = message.as_str().unwrap_or("");
@@ -98,11 +111,15 @@ impl OrcaStandardAMM {
     ) -> Result<CommonTransactionData> {
         let signature = tx_data["transaction"]["signatures"][0]
             .as_str()
-            .context("Missing signature")?
+            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?
             .to_string();
-        let block_time = tx_data["blockTime"].as_i64().context("Missing blockTime")?;
-        let block_time_utc =
-            DateTime::<Utc>::from_timestamp(block_time, 0).context("Invalid blockTime")?;
+
+        let block_time = tx_data["blockTime"]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
+
+        let block_time_utc = DateTime::<Utc>::from_timestamp(block_time, 0)
+            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
 
         let pre_balances = self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let post_balances = self.get_token_balances(tx_data, "postTokenBalances", pool_address)?;
@@ -115,6 +132,7 @@ impl OrcaStandardAMM {
                 .get(&self.token_a_address)
                 .copied()
                 .unwrap_or(0.0);
+
         let amount_b = post_balances
             .get(&self.token_b_address)
             .copied()
@@ -141,19 +159,19 @@ impl OrcaStandardAMM {
     ) -> Result<HashMap<String, f64>> {
         let balances = json["meta"][balance_type]
             .as_array()
-            .context(format!("Missing {}", balance_type))?;
+            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
 
         let mut result = HashMap::new();
         for balance in balances {
             if balance["owner"].as_str() == Some(pool_address) {
                 let mint = balance["mint"]
                     .as_str()
-                    .context("Missing mint")?
+                    .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?
                     .to_string();
 
                 let amount = balance["uiTokenAmount"]["uiAmount"]
                     .as_f64()
-                    .context("Missing amount")?;
+                    .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
 
                 result.insert(mint, amount);
             }
@@ -190,7 +208,7 @@ impl OrcaStandardAMM {
         tx_data: &Value,
         pool_address: &str,
     ) -> Result<TransactionModel> {
-        let common_data = self.extract_common_data(tx_data)?;
+        let common_data = self.extract_common_data(tx_data, pool_address)?;
         let transaction_type = Self::determine_transaction_type(tx_data)?;
 
         let (amount_a, amount_b) = self.extract_liquidity_amounts(tx_data, pool_address)?;
@@ -205,7 +223,6 @@ impl OrcaStandardAMM {
             data: match transaction_type.as_str() {
                 "IncreaseLiquidity" | "IncreaseLiquidityV2" => {
                     TransactionData::IncreaseLiquidity(LiquidityData {
-                        key_position: "".to_string(),
                         token_a: self.token_a_address.clone(),
                         token_b: self.token_b_address.clone(),
                         amount_a,
@@ -216,7 +233,6 @@ impl OrcaStandardAMM {
                 }
                 "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
                     TransactionData::DecreaseLiquidity(LiquidityData {
-                        key_position: "".to_string(),
                         token_a: self.token_a_address.clone(),
                         token_b: self.token_b_address.clone(),
                         amount_a,
@@ -231,7 +247,7 @@ impl OrcaStandardAMM {
     }
 
     fn convert_swap_data(&self, tx_data: &Value, pool_address: &str) -> Result<TransactionModel> {
-        let common_data = self.extract_common_data(tx_data)?;
+        let common_data = self.extract_common_data(tx_data, pool_address)?;
         let transaction_type = Self::determine_transaction_type(tx_data)?;
 
         let (token_in, token_out, amount_in, amount_out) =
@@ -295,7 +311,7 @@ impl OrcaStandardAMM {
 
         let token_out = post_balances
             .iter()
-            .find(|(token, &amount)| amount > 0.0 && *token != token_in)
+            .find(|(token, &amount)| amount > 0.0 && token.as_str() != token_in)
             .map(|(token, _)| token.clone())
             .ok_or_else(|| anyhow::anyhow!("Unable to determine output token"))?;
 
@@ -313,14 +329,18 @@ impl AMMService for OrcaStandardAMM {
         &self.transaction_api
     }
 
-    async fn fetch_transactions(
-        &self,
-        pool_address: &str,
-        start_time: DateTime<Utc>,
-        cursor: Cursor,
-    ) -> Result<Vec<Value>> {
+    async fn fetch_transactions(&self, pool_address: &str, cursor: Cursor) -> Result<Vec<Value>> {
+        let optional_signature = match cursor {
+            Cursor::OptionalSignature(sig) => sig,
+            Cursor::DateTime(_) => None,
+        };
+
         let signatures = self
-            .fetch_signatures_with_retry(pool_address, SIGNATURE_BATCH_SIZE, cursor.as_deref())
+            .fetch_signatures(
+                pool_address,
+                SIGNATURE_BATCH_SIZE,
+                optional_signature.as_deref(),
+            )
             .await?;
 
         let filtered_signatures: Vec<SignatureInfo> = signatures
@@ -336,7 +356,7 @@ impl AMMService for OrcaStandardAMM {
                 chunk.iter().map(|sig| sig.signature.clone()).collect();
 
             let tx_data_batch = self
-                .fetch_transactions_with_retry(pool_address, &signature_strings)
+                .fetch_transactions_from_signatures(&signature_strings)
                 .await?;
 
             let futures = tx_data_batch.into_iter().map(|tx_data| async move {
@@ -357,25 +377,29 @@ impl AMMService for OrcaStandardAMM {
     fn convert_data_to_transactions_model(
         &self,
         pool_address: &str,
-        tx_data: &Value,
+        tx_data: Vec<Value>,
     ) -> Result<Vec<TransactionModel>> {
         let mut transactions = Vec::new();
 
-        match Self::determine_transaction_type(tx_data)?.as_str() {
-            "Swap" => {
-                if let Ok(swap_data) = self.convert_swap_data(tx_data, pool_address) {
-                    transactions.push(swap_data);
+        for transaction in tx_data {
+            match Self::determine_transaction_type(&transaction)?.as_str() {
+                "Swap" => {
+                    if let Ok(swap_data) = self.convert_swap_data(&transaction, pool_address) {
+                        transactions.push(swap_data);
+                    }
                 }
-            }
-            "IncreaseLiquidity"
-            | "DecreaseLiquidity"
-            | "IncreaseLiquidityV2"
-            | "DecreaseLiquidityV2" => {
-                if let Ok(liquidity_data) = self.convert_liquidity_data(tx_data, pool_address) {
-                    transactions.push(liquidity_data);
+                "IncreaseLiquidity"
+                | "DecreaseLiquidity"
+                | "IncreaseLiquidityV2"
+                | "DecreaseLiquidityV2" => {
+                    if let Ok(liquidity_data) =
+                        self.convert_liquidity_data(&transaction, pool_address)
+                    {
+                        transactions.push(liquidity_data);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
 
         Ok(transactions)
@@ -395,13 +419,13 @@ impl AMMService for OrcaStandardAMM {
 
         loop {
             let transactions = self
-                .fetch_transactions(pool_address, start_time, cursor)
+                .fetch_transactions(pool_address, cursor.clone())
                 .await?;
 
             println!("Processing {} transactions", transactions.len());
 
             let transaction_models =
-                self.convert_data_to_transactions_model(pool_address, transactions.clone());
+                self.convert_data_to_transactions_model(pool_address, transactions.clone())?;
 
             self.insert_transactions(transaction_models).await?;
 

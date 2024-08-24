@@ -1,9 +1,6 @@
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-
-use crate::utils::decode::Pubkey;
 
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct PositionModel {
@@ -18,10 +15,10 @@ pub struct PositionModel {
     pub last_updated_at: DateTime<Utc>,
 }
 
-impl PositionsModel {
+impl PositionModel {
     pub fn new(
         address: String,
-        liquidity: i16,
+        liquidity: i64,
         tick_lower: i16,
         tick_upper: i16,
         token_a_amount: i16,
