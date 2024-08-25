@@ -60,8 +60,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool_data = pool_service.get_pool_data(&config.pool_address).await?;
 
-    println!("{:?}", pool_data);
-
     let positions_repo = PositionsRepo::new(pool.clone());
     let positions_api = PositionsApi::new()?;
     let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
@@ -77,8 +75,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let positions_data = positions_service
         .get_position_data(&config.pool_address)
         .await?;
-
-    println!("DONE!");
 
     // let tx_repo = TransactionRepo::new(pool);
     // let tx_api = TransactionApi::new()?;

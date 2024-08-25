@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use crate::{models::pool_model::PoolModel, services::transactions_amm_service::AMMPlatforms};
 use chrono::Utc;
 use sqlx::{query, query_as, Pool, Postgres};
@@ -65,8 +63,9 @@ impl PoolRepo {
     pub async fn update_liquidity(
         &self,
         address: &str,
-        total_liquidity: i64,
+        total_liquidity: u128,
     ) -> Result<(), sqlx::Error> {
+        // Total liquidity stored as string bcos postgres only supports upto i64.
         query(
             r#"
             UPDATE pools
@@ -74,7 +73,7 @@ impl PoolRepo {
             WHERE address = $3
             "#,
         )
-        .bind(total_liquidity)
+        .bind(total_liquidity.to_string())
         .bind(Utc::now())
         .bind(address)
         .execute(&self.db)
