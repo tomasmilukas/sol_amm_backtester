@@ -275,18 +275,19 @@ impl OrcaOptimizedAMM {
         index: &str,
         is_v2: bool,
     ) -> String {
-        let key = if is_v2 {
-            format!("transfer{}", index)
+        if is_v2 {
+            payload
+                .get(&format!("transfer{}", index))
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string()
         } else {
-            format!("transferAmount{}", index)
-        };
-
-        payload
-            .get(&key)
-            .and_then(|v| v.get("amount"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("0")
-            .to_string()
+            payload
+                .get(&format!("transferAmount{}", index))
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string()
+        }
     }
 
     fn convert_two_hop_swap(
