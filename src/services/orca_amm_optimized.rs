@@ -417,15 +417,21 @@ impl AMMService for OrcaOptimizedAMM {
         start_time: DateTime<Utc>,
         latest_db_transaction: Option<TransactionModel>,
     ) -> Result<()> {
-        let yesterday = Utc::now().date() - Duration::days(1);
+        let yesterday = (Utc::now() - Duration::days(1)).date_naive();
         let mut current_date = if let Some(latest_tx) = latest_db_transaction {
-            latest_tx.block_time_utc.date()
+            latest_tx.block_time_utc.date_naive()
         } else {
             yesterday
         };
 
-        while current_date >= start_time.date() {
-            let cursor = Cursor::DateTime(current_date.and_hms(0, 0, 0));
+        let start_date = start_time.date_naive();
+
+        while current_date >= start_date {
+            let current_datetime = DateTime::<Utc>::from_naive_utc_and_offset(
+                current_date.and_hms_opt(0, 0, 0).unwrap(),
+                Utc,
+            );
+            let cursor = Cursor::DateTime(current_datetime);
 
             let transactions = self.fetch_transactions(pool_address, cursor).await?;
 
@@ -434,8 +440,9 @@ impl AMMService for OrcaOptimizedAMM {
                     "No transactions for {}. Moving to previous day.",
                     current_date
                 );
-                current_date -= Duration::days(1);
-
+                current_date = current_date
+                    .pred_opt()
+                    .expect("Failed to get previous date"); // Move to previous day
                 continue;
             }
 
@@ -443,11 +450,12 @@ impl AMMService for OrcaOptimizedAMM {
 
             let transaction_models =
                 self.convert_data_to_transactions_model(pool_address, transactions)?;
-
             self.insert_transactions(transaction_models).await?;
 
             // Move to the previous day
-            current_date -= Duration::days(1);
+            current_date = current_date
+                .pred_opt()
+                .expect("Failed to get previous date");
         }
 
         println!("Reached or passed start_time {}. Exiting.", start_time);

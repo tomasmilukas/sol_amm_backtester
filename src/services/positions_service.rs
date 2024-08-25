@@ -1,6 +1,7 @@
+use crate::api::positions_api::PositionsApi;
+use crate::models::positions_model::PositionModel;
 use crate::repositories::pool_repo::PoolRepo;
 use crate::repositories::positions_repo::PositionsRepo;
-use crate::{api::positions_api::PositionsApi, models::positions_model::PositionModel};
 use anyhow::{Context, Result};
 
 pub struct PositionsService {
@@ -19,18 +20,11 @@ impl PositionsService {
     }
 
     pub async fn fetch_and_store_positions_data(&self, pool_address: &str) -> Result<()> {
-        // Fetch positions and metadata
         let positions = self
             .api
-            .scrape_positions(pool_address)
+            .get_positions(pool_address)
             .await
-            .context("Failed to scrape positions")?;
-
-        let metadata = self
-            .api
-            .scrape_metadata(pool_address)
-            .await
-            .context("Failed to scrape metadata")?;
+            .context("Failed to get positions data")?;
 
         // Start a transaction
         let mut transaction = self
@@ -39,13 +33,12 @@ impl PositionsService {
             .await
             .context("Failed to start transaction")?;
 
-        let liquidity = metadata
-            .liquidity
-            .parse::<i64>()
-            .context("Failed to parse liquidity as i64")?;
+        // Calculate total liquidity
+        let total_liquidity: u128 = positions.iter().map(|p| p.liquidity).sum();
 
+        // Update pool liquidity
         self.pool_repo
-            .update_liquidity(pool_address, liquidity)
+            .update_liquidity(pool_address, total_liquidity)
             .await
             .context("Failed to update pool liquidity")?;
 

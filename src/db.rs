@@ -17,7 +17,7 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             token_a_vault TEXT NOT NULL,
             token_b_vault TEXT NOT NULL,
             tick_spacing SMALLINT NOT NULL,
-            total_liquidity BIGINT,
+            total_liquidity TEXT,
             fee_rate SMALLINT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -47,12 +47,9 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
         CREATE TABLE IF NOT EXISTS positions (
             address TEXT PRIMARY KEY,
             pool_address TEXT NOT NULL REFERENCES pools(address),
-            liquidity BIGINT NOT NULL,
+            liquidity TEXT NOT NULL,
             tick_lower INTEGER NOT NULL,
             tick_upper INTEGER NOT NULL,
-            token_a_amount BIGINT NOT NULL,
-            token_b_amount BIGINT NOT NULL,
-            time_scraped_at TIMESTAMPTZ NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
