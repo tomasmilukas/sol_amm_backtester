@@ -1,9 +1,7 @@
-use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::utils::transaction_utils;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionModel {
