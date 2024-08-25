@@ -1,6 +1,8 @@
-use crate::models::pool_model::PoolModel;
+use crate::{models::pool_model::PoolModel, services::transactions_amm_service::AMMPlatforms};
+use chrono::Utc;
 use sqlx::{query, query_as, Pool, Postgres};
 
+#[derive(Clone)]
 pub struct PoolRepo {
     db: Pool<Postgres>,
 }
@@ -10,15 +12,19 @@ impl PoolRepo {
         Self { db }
     }
 
-    pub async fn upsert(&self, pool: &PoolModel) -> Result<(), sqlx::Error> {
+    pub async fn upsert(
+        &self,
+        pool: &PoolModel,
+        pool_platform: AMMPlatforms,
+    ) -> Result<(), sqlx::Error> {
         query(
             r#"
             INSERT INTO pools (
-                address, name, token_a_name, token_b_name, 
-                token_a_address, token_b_address, token_a_decimals, token_b_decimals, 
-                tick_spacing, fee_rate, created_at, last_updated_at
+                address, platform, name, token_a_name, token_b_name, 
+                token_a_address, token_b_address, token_a_decimals, token_b_decimals,
+                token_a_vault, token_b_vault, tick_spacing, fee_rate, last_updated_at
             ) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (address) DO UPDATE SET
                 name = EXCLUDED.name,
                 token_a_name = EXCLUDED.token_a_name,
@@ -27,12 +33,15 @@ impl PoolRepo {
                 token_b_address = EXCLUDED.token_b_address,
                 token_a_decimals = EXCLUDED.token_a_decimals,
                 token_b_decimals = EXCLUDED.token_b_decimals,
+                token_a_vault = EXCLUDED.token_a_vault,
+                token_b_vault = EXCLUDED.token_b_vault,
                 tick_spacing = EXCLUDED.tick_spacing,
                 fee_rate = EXCLUDED.fee_rate,
-                last_updated_at = $12
+                last_updated_at = $14
             "#,
         )
         .bind(&pool.address)
+        .bind(pool_platform.to_string())
         .bind(&pool.name)
         .bind(&pool.token_a_name)
         .bind(&pool.token_b_name)
@@ -40,10 +49,33 @@ impl PoolRepo {
         .bind(&pool.token_b_address)
         .bind(pool.token_a_decimals)
         .bind(pool.token_b_decimals)
+        .bind(&pool.token_a_vault)
+        .bind(&pool.token_b_vault)
         .bind(pool.tick_spacing)
         .bind(pool.fee_rate)
-        .bind(pool.created_at)
         .bind(pool.last_updated_at)
+        .execute(&self.db)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_liquidity(
+        &self,
+        address: &str,
+        total_liquidity: u128,
+    ) -> Result<(), sqlx::Error> {
+        // Total liquidity stored as string bcos postgres only supports upto i64.
+        query(
+            r#"
+            UPDATE pools
+            SET total_liquidity = $1, last_updated_at = $2
+            WHERE address = $3
+            "#,
+        )
+        .bind(total_liquidity.to_string())
+        .bind(Utc::now())
+        .bind(address)
         .execute(&self.db)
         .await?;
 

@@ -5,6 +5,8 @@ use crate::utils::decode::decode_whirlpool;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 
+use super::transactions_amm_service::AMMPlatforms;
+
 pub struct PoolService {
     repo: PoolRepo,
     api: PoolApi,
@@ -15,14 +17,18 @@ impl PoolService {
         Self { repo, api }
     }
 
-    pub async fn fetch_and_store_pool_data(&self, pool_address: &str) -> Result<()> {
+    pub async fn fetch_and_store_pool_data(
+        &self,
+        pool_address: &str,
+        pool_platform: AMMPlatforms,
+    ) -> Result<()> {
         let whirlpool = self.fetch_and_decode_pool_data(pool_address).await?;
 
         let pool = self
             .convert_whirlpool_to_pool(pool_address.to_string(), whirlpool)
             .await?;
 
-        self.repo.upsert(&pool).await?;
+        self.repo.upsert(&pool, pool_platform).await?;
 
         Ok(())
     }

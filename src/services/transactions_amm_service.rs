@@ -42,18 +42,13 @@ pub trait AMMService: Send + Sync {
     fn repo(&self) -> &TransactionRepo;
     fn api(&self) -> &TransactionApi;
 
-    async fn fetch_transactions(
-        &self,
-        pool_address: &str,
-        start_time: DateTime<Utc>,
-        cursor: Cursor,
-    ) -> Result<Vec<Value>>;
+    async fn fetch_transactions(&self, pool_address: &str, cursor: Cursor) -> Result<Vec<Value>>;
 
     fn convert_data_to_transactions_model(
         &self,
         pool_address: &str,
-        data: Value,
-    ) -> Vec<TransactionModel>;
+        tx_data: Vec<Value>,
+    ) -> Result<Vec<TransactionModel>>;
 
     async fn fetch_and_insert_transactions(
         &self,

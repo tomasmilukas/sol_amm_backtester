@@ -3,7 +3,6 @@ use sqlx::postgres::PgPool;
 
 pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()> {
     let statements = [
-
         r#"
         CREATE TABLE IF NOT EXISTS pools (
             address TEXT PRIMARY KEY,
@@ -15,12 +14,16 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             token_b_address TEXT NOT NULL,
             token_a_decimals SMALLINT NOT NULL,
             token_b_decimals SMALLINT NOT NULL,
+            token_a_vault TEXT NOT NULL,
+            token_b_vault TEXT NOT NULL,
             tick_spacing SMALLINT NOT NULL,
+            total_liquidity TEXT,
             fee_rate SMALLINT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
+
 
         r#"
         CREATE TABLE IF NOT EXISTS transactions (
@@ -35,10 +38,23 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
-
         "CREATE INDEX IF NOT EXISTS idx_transactions_pool_address ON transactions(pool_address)",
         "CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time)",
         "CREATE INDEX IF NOT EXISTS idx_transactions_block_time_utc ON transactions(block_time_utc)",
+
+
+        r#"
+        CREATE TABLE IF NOT EXISTS positions (
+            address TEXT PRIMARY KEY,
+            pool_address TEXT NOT NULL REFERENCES pools(address),
+            liquidity TEXT NOT NULL,
+            tick_lower INTEGER NOT NULL,
+            tick_upper INTEGER NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+        "CREATE INDEX IF NOT EXISTS idx_positions_pool_address ON positions(pool_address)",
     ];
 
     for statement in statements.iter() {
