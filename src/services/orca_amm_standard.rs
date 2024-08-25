@@ -13,7 +13,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use futures::future::join_all;
 use serde_json::Value;
 
-use super::transactions_amm_service::constants::SIGNATURE_BATCH_SIZE;
+use super::transactions_amm_service::constants::{SIGNATURE_BATCH_SIZE, TX_BATCH_SIZE};
 use super::transactions_amm_service::Cursor;
 
 pub struct OrcaStandardAMM {
@@ -191,6 +191,7 @@ impl OrcaStandardAMM {
                 .get(&self.token_a_address)
                 .copied()
                 .unwrap_or(0.0);
+            
         let amount_b = post_balances
             .get(&self.token_b_address)
             .copied()
@@ -351,7 +352,7 @@ impl AMMService for OrcaStandardAMM {
         let mut all_relevant_transactions = Vec::new();
 
         // Process transactions in batches of 10
-        for chunk in filtered_signatures.chunks(10) {
+        for chunk in filtered_signatures.chunks(TX_BATCH_SIZE) {
             let signature_strings: Vec<String> =
                 chunk.iter().map(|sig| sig.signature.clone()).collect();
 

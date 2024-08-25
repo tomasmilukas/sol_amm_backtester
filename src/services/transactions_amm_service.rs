@@ -59,28 +59,15 @@ pub trait AMMService: Send + Sync {
     ) -> Result<()>;
 
     async fn insert_transactions(&self, transactions: Vec<TransactionModel>) -> Result<()> {
-        let mut errors = Vec::new();
-
-        for model in transactions {
-            match self.repo().insert(&model).await {
-                Ok(_) => {
-                    println!(
-                        "Successfully processed tx. Current tx: {:?}",
-                        model.signature
-                    );
-                }
-                Err(e) => {
-                    let error =
-                        anyhow!("Failed to insert transaction {}: {:?}", model.signature, e);
-                    errors.push(error);
-                }
+        match self.repo().insert(&transactions).await {
+            Ok(count) => {
+                println!("Successfully inserted {} transactions", count);
+                Ok(())
             }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(anyhow!("Failed to insert some transactions: {:?}", errors))
+            Err(e) => {
+                println!("Failed to insert transactions: {:?}", e);
+                Err(anyhow!("Failed to insert transactions: {:?}", e))
+            }
         }
     }
 
