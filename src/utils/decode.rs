@@ -74,9 +74,6 @@ pub fn decode_position(data: &[u8]) -> Result<Position> {
     let mut actual_discriminator = [0u8; 8];
     rdr.read_exact(&mut actual_discriminator)?;
 
-    println!("Expected discriminator: {:?}", expected_discriminator);
-    println!("Actual discriminator: {:?}", actual_discriminator);
-
     if actual_discriminator != expected_discriminator {
         return Err(anyhow::anyhow!("Invalid account discriminator"));
     }

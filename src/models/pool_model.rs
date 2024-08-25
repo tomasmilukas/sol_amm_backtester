@@ -42,7 +42,7 @@ pub struct PoolModel {
     pub token_a_decimals: i16,
     pub token_b_decimals: i16,
     pub tick_spacing: i16,
-    pub total_liquidity: Option<i64>,
+    pub total_liquidity: Option<String>,
     pub fee_rate: i16,
     pub last_updated_at: DateTime<Utc>,
 }
