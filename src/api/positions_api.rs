@@ -54,29 +54,14 @@ impl PositionsApi {
 
         let mut positions = Vec::new();
 
-        for (index, account) in accounts.iter().enumerate() {
-            println!("Parsing position {}", index);
-            println!("Pubkey: {}", account["pubkey"]);
-
+        for account in accounts.iter() {
             let data = account["account"]["data"][0]
                 .as_str()
                 .ok_or_else(|| anyhow!("Invalid data structure"))?;
             let decoded = general_purpose::STANDARD.decode(data)?;
 
-            println!("Raw decoded data length: {}", decoded.len());
-            println!("First 32 bytes: {:?}", &decoded[..32]);
-
             match decode_position(&decoded) {
                 Ok(position) => {
-                    println!("Decoded position:");
-                    println!("  Whirlpool: {}", position.whirlpool);
-                    println!("  Position Mint: {}", position.position_mint);
-                    println!("  Liquidity: {}", position.liquidity);
-                    println!("  Tick Lower Index: {}", position.tick_lower_index);
-                    println!("  Tick Upper Index: {}", position.tick_upper_index);
-                    println!("  Fee Owed A: {}", position.fee_owed_a);
-                    println!("  Fee Owed B: {}", position.fee_owed_b);
-
                     let address = String::from(
                         account["pubkey"]
                             .as_str()
@@ -94,11 +79,7 @@ impl PositionsApi {
                 }
                 Err(e) => println!("Error decoding position: {:?}", e),
             }
-
-            println!("-------------------------");
         }
-
-        println!("Total positions parsed: {}", positions.len());
         Ok(positions)
     }
 }

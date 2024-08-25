@@ -69,7 +69,7 @@ impl PositionsRepo {
             .fetch_optional(&self.db)
             .await?;
 
-        Ok(row.map(|r| self.row_to_model(r)).transpose()?)
+        row.map(|r| self.row_to_model(r)).transpose()
     }
 
     pub async fn get_positions_by_pool_address(
