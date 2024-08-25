@@ -26,6 +26,7 @@ pub mod constants {
 }
 
 // Platforms supported.
+#[derive(Debug, Clone, Copy)]
 pub enum AMMPlatforms {
     Orca,
     Raydium,
@@ -165,8 +166,13 @@ pub async fn create_amm_service(
             }
 
             let client = reqwest::Client::new();
+            let url = format!(
+                "{}/2024/0821/whirlpool-transaction-20240821.jsonl.gz",
+                ORCA_OPTIMIZED_PATH_BASE_URL.trim_end_matches('/')
+            );
+
             let response = client
-                .get(ORCA_OPTIMIZED_PATH_BASE_URL)
+                .head(&url)
                 .timeout(Duration::from_secs(10))
                 .send()
                 .await;

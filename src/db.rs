@@ -31,7 +31,6 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             pool_address TEXT NOT NULL REFERENCES pools(address),
             block_time BIGINT NOT NULL,
             block_time_utc TIMESTAMPTZ NOT NULL,
-            slot BIGINT NOT NULL,
             transaction_type TEXT NOT NULL,
             ready_for_backtesting BOOL NOT NULL,
             data JSONB NOT NULL,

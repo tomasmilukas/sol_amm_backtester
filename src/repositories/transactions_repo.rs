@@ -18,8 +18,8 @@ impl TransactionRepo {
     pub async fn insert(&self, transaction: &TransactionModel) -> Result<()> {
         let _ = sqlx::query(
             r#"
-            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, data)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, ready_for_backtesting, data)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (signature) 
             DO UPDATE SET 
                 pool_address = EXCLUDED.pool_address,
@@ -34,7 +34,8 @@ impl TransactionRepo {
         .bind(transaction.block_time)
         .bind(transaction.block_time_utc)
         .bind(&transaction.transaction_type)
-        .bind(&serde_json::to_value(transaction)?)
+        .bind(transaction.ready_for_backtesting)
+        .bind(&serde_json::to_value(&transaction.data)?)
         .execute(&self.pool)
         .await;
 
