@@ -19,9 +19,9 @@ use super::{
 pub mod constants {
     pub const MAX_RETRIES: u32 = 5;
     pub const BASE_DELAY: u64 = 5000; // 5 seconds
-    pub const MAX_DELAY: u64 = 300_000; // 5 minutes
+    pub const MAX_DELAY: u64 = 60_000; // 1 minute
     pub const SIGNATURE_BATCH_SIZE: u32 = 1000;
-    pub const TX_BATCH_SIZE: usize = 10;
+    pub const TX_BATCH_SIZE: usize = 20;
     pub const ORCA_OPTIMIZED_PATH_BASE_URL: &str = "https://whirlpool-replay.pleiades.dev/alpha";
 }
 
