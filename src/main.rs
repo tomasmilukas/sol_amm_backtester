@@ -87,6 +87,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &pool_data.token_b_address,
         &pool_data.token_a_vault,
         &pool_data.token_b_vault,
+        pool_data.token_a_decimals,
+        pool_data.token_b_decimals,
     )
     .await
     {
