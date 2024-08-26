@@ -133,6 +133,8 @@ pub async fn create_amm_service(
     token_b_address: &str,
     token_a_vault: &str,
     token_b_vault: &str,
+    token_a_decimals: i16,
+    token_b_decimals: i16,
 ) -> Result<Arc<dyn AMMService>> {
     match platform {
         AMMPlatforms::Orca => {
@@ -147,6 +149,8 @@ pub async fn create_amm_service(
                         transaction_api,
                         String::from(token_a_address),
                         String::from(token_b_address),
+                        token_a_decimals,
+                        token_b_decimals,
                     )
                     .await,
                 ));
@@ -187,6 +191,8 @@ pub async fn create_amm_service(
                     transaction_api,
                     String::from(token_a_address),
                     String::from(token_b_address),
+                    token_a_decimals,
+                    token_b_decimals,
                 )
                 .await,
             ))

@@ -4,7 +4,9 @@ use crate::models::transactions_model::{
 };
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_amm_service::{constants, AMMService};
+use crate::utils::hawksight_parsing_tx::{HawksightParser, PoolInfo};
 use crate::utils::transaction_utils::retry_with_backoff;
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
@@ -19,12 +21,14 @@ pub struct OrcaStandardAMM {
     transaction_api: TransactionApi,
     token_a_address: String,
     token_b_address: String,
+    token_a_decimals: i16,
+    token_b_decimals: i16,
 }
 
-struct CommonTransactionData {
-    signature: String,
-    block_time: i64,
-    block_time_utc: DateTime<Utc>,
+pub struct CommonTransactionData {
+    pub signature: String,
+    pub block_time: i64,
+    pub block_time_utc: DateTime<Utc>,
 }
 
 impl OrcaStandardAMM {
@@ -33,12 +37,16 @@ impl OrcaStandardAMM {
         transaction_api: TransactionApi,
         token_a_address: String,
         token_b_address: String,
+        token_a_decimals: i16,
+        token_b_decimals: i16,
     ) -> Self {
         Self {
             transaction_repo,
             transaction_api,
             token_a_address,
             token_b_address,
+            token_a_decimals,
+            token_b_decimals,
         }
     }
 
@@ -230,7 +238,7 @@ impl OrcaStandardAMM {
         let transaction_type = Self::determine_transaction_type(tx_data)?;
 
         let (token_in, token_out, amount_in, amount_out) =
-            self.extract_swap_amounts(tx_data, pool_address, &transaction_type)?;
+            self.extract_swap_amounts(tx_data, pool_address)?;
 
         Ok(TransactionModel {
             signature: common_data.signature,
@@ -252,16 +260,13 @@ impl OrcaStandardAMM {
         &self,
         tx_data: &Value,
         pool_address: &str,
-        transaction_type: &str,
     ) -> Result<(String, String, f64, f64)> {
         let (token_a, pre_a, token_b, pre_b) =
             self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let (_, post_a, _, post_b) =
             self.get_token_balances(tx_data, "postTokenBalances", pool_address)?;
 
-        let (token_in, token_out, amount_in, amount_out) = if transaction_type == "TwoHopSwap" {
-            self.calculate_two_hop_swap(tx_data)?
-        } else if pre_a > post_a {
+        let (token_in, token_out, amount_in, amount_out) = if pre_a > post_a {
             (token_a, token_b, pre_a - post_a, post_b - pre_b)
         } else {
             (token_b, token_a, pre_b - post_b, post_a - pre_a)
@@ -274,34 +279,6 @@ impl OrcaStandardAMM {
                 amount_out
             ));
         }
-
-        Ok((token_in, token_out, amount_in, amount_out))
-    }
-
-    fn calculate_two_hop_swap(&self, tx_data: &Value) -> Result<(String, String, f64, f64)> {
-        println!("IN TWO HOP SWAP");
-        println!(
-            "SIG: {:?}",
-            tx_data["transaction"]["signatures"][0]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?
-                .to_string()
-        );
-
-        let (pre_a, pre_a_amt, pre_b, pre_b_amt) =
-            self.get_token_balances(tx_data, "preTokenBalances", "")?;
-        let (post_a, post_a_amt, post_b, post_b_amt) =
-            self.get_token_balances(tx_data, "postTokenBalances", "")?;
-
-        let token_in = if pre_a_amt > post_a_amt { pre_a } else { pre_b };
-        let token_out = if post_a_amt > pre_a_amt && post_a != token_in {
-            post_a
-        } else {
-            post_b
-        };
-
-        let amount_in = (pre_a_amt - post_a_amt).max(pre_b_amt - post_b_amt);
-        let amount_out = (post_a_amt - pre_a_amt).max(post_b_amt - pre_b_amt);
 
         Ok((token_in, token_out, amount_in, amount_out))
     }
@@ -370,23 +347,40 @@ impl AMMService for OrcaStandardAMM {
         let mut transactions = Vec::new();
 
         for transaction in tx_data {
-            match Self::determine_transaction_type(&transaction)?.as_str() {
-                "Swap" | "TwoHopSwap" => {
-                    if let Ok(swap_data) = self.convert_swap_data(&transaction, pool_address) {
-                        transactions.push(swap_data);
-                    }
+            if HawksightParser::is_hawksight_transaction(&transaction) {
+                let pool_info = PoolInfo {
+                    address: pool_address.to_string(),
+                    token_a: self.token_a_address.clone(),
+                    token_b: self.token_b_address.clone(),
+                    decimals_a: self.token_a_decimals,
+                    decimals_b: self.token_b_decimals,
+                };
+                let common_data = self.extract_common_data(&transaction)?;
+
+                if let Ok(hawksight_transactions) =
+                    HawksightParser::parse_hawksight_program(&transaction, &pool_info, &common_data)
+                {
+                    transactions.extend(hawksight_transactions);
                 }
-                "IncreaseLiquidity"
-                | "DecreaseLiquidity"
-                | "IncreaseLiquidityV2"
-                | "DecreaseLiquidityV2" => {
-                    if let Ok(liquidity_data) =
-                        self.convert_liquidity_data(&transaction, pool_address)
-                    {
-                        transactions.push(liquidity_data);
+            } else {
+                match Self::determine_transaction_type(&transaction)?.as_str() {
+                    "Swap" | "TwoHopSwap" => {
+                        if let Ok(swap_data) = self.convert_swap_data(&transaction, pool_address) {
+                            transactions.push(swap_data);
+                        }
                     }
+                    "IncreaseLiquidity"
+                    | "DecreaseLiquidity"
+                    | "IncreaseLiquidityV2"
+                    | "DecreaseLiquidityV2" => {
+                        if let Ok(liquidity_data) =
+                            self.convert_liquidity_data(&transaction, pool_address)
+                        {
+                            transactions.push(liquidity_data);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
