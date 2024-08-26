@@ -96,6 +96,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    println!("Transaction sync kick off!");
+
     // Sync transactions
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
