@@ -13,7 +13,7 @@ use crate::{
     repositories::pool_repo::PoolRepo,
     services::{
         pool_service::PoolService,
-        transactions_amm_service::{AMMPlatforms, AMMService},
+        transactions_sync_amm_service::{AMMPlatforms, AMMService},
     },
 };
 
@@ -23,7 +23,7 @@ use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
 use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
-use services::{positions_service::PositionsService, transactions_amm_service::create_amm_service};
+use services::{positions_service::PositionsService, transactions_sync_amm_service::create_amm_service};
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc};
 
@@ -60,21 +60,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool_data = pool_service.get_pool_data(&config.pool_address).await?;
 
-    // let positions_repo = PositionsRepo::new(pool.clone());
-    // let positions_api = PositionsApi::new()?;
-    // let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
+    let positions_repo = PositionsRepo::new(pool.clone());
+    let positions_api = PositionsApi::new()?;
+    let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
 
-    // match positions_service
-    //     .fetch_and_store_positions_data(&config.pool_address)
-    //     .await
-    // {
-    //     Ok(()) => println!("Positions data fetched and stored successfully"),
-    //     Err(e) => eprintln!("Positions fetching related error: {}", e),
-    // }
-
-    // let positions_data = positions_service
-    //     .get_position_data(&config.pool_address)
-    //     .await?;
+    match positions_service
+        .fetch_and_store_positions_data(&config.pool_address)
+        .await
+    {
+        Ok(()) => println!("Positions data fetched and stored successfully"),
+        Err(e) => eprintln!("Positions fetching related error: {}", e),
+    }
 
     let tx_repo = TransactionRepo::new(pool);
     let tx_api = TransactionApi::new()?;
@@ -110,6 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_f) => println!("Synced transactions successfully"),
         Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
+
+    // Update transactions since not all data can be retrieved during sync. Updates will happen using position_data, to fill in liquidity info.
 
     Ok(())
 }

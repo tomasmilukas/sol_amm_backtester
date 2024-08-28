@@ -7,7 +7,7 @@ use tokio_retry::{
     Retry,
 };
 
-use crate::services::transactions_amm_service::AMMPlatforms;
+use crate::services::transactions_sync_amm_service::AMMPlatforms;
 
 pub async fn retry_with_backoff<F, Fut, T, E>(
     f: F,

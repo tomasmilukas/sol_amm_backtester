@@ -52,6 +52,78 @@ impl TransactionRepo {
         Ok(inserted_count)
     }
 
+    pub async fn upsert_liquidity_transactions(
+        &self,
+        transactions: &[TransactionModel],
+    ) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+
+        let mut upserted_count = 0;
+
+        for transaction in transactions {
+            let result = sqlx::query(
+                r#"
+                INSERT INTO transactions (
+                    signature, 
+                    pool_address, 
+                    block_time, 
+                    block_time_utc, 
+                    transaction_type, 
+                    ready_for_backtesting, 
+                    data
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (signature, transaction_type)
+                DO UPDATE SET
+                    data = EXCLUDED.data,
+                    ready_for_backtesting = EXCLUDED.ready_for_backtesting
+                RETURNING tx_id
+                "#,
+            )
+            .bind(&transaction.signature)
+            .bind(&transaction.pool_address)
+            .bind(transaction.block_time)
+            .bind(transaction.block_time_utc)
+            .bind(&transaction.transaction_type)
+            .bind(transaction.ready_for_backtesting)
+            .bind(&serde_json::to_value(&transaction.data)?) // Assuming data is already a Value or can be serialized to JSON
+            .execute(&mut tx)
+            .await?;
+
+            upserted_count += result.rows_affected() as usize;
+        }
+
+        tx.commit().await?;
+
+        Ok(upserted_count)
+    }
+
+    pub async fn fetch_liquidity_txs_to_update(
+        &self,
+        last_tx_id: i64,
+        limit: i64,
+    ) -> Result<Vec<TransactionModel>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT 
+                tx_id, signature, pool_address, block_time, block_time_utc, 
+                transaction_type, ready_for_backtesting, data
+            FROM transactions
+            WHERE tx_id > $1 AND ready_for_backtesting = FALSE
+            ORDER BY tx_id
+            LIMIT $2
+            "#,
+        )
+        .bind(last_tx_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| self.row_to_transaction_model(&row))
+            .collect()
+    }
+
     pub async fn fetch_lowest_block_time_transaction(
         &self,
         pool_address: &str,
@@ -92,59 +164,6 @@ impl TransactionRepo {
         result
             .map(|row| self.row_to_transaction_model(&row))
             .transpose()
-    }
-
-    pub async fn fetch_transactions_by_time_range(
-        &self,
-        pool_address: &str,
-        start_time: DateTime<Utc>,
-        end_time: DateTime<Utc>,
-    ) -> Result<Vec<TransactionModel>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT signature, pool_address, block_time, slot, transaction_type, data
-            FROM transactions
-            WHERE pool_address = $1 AND block_time BETWEEN $2 AND $3
-            ORDER BY block_time ASC
-            "#,
-        )
-        .bind(pool_address)
-        .bind(start_time)
-        .bind(end_time)
-        .fetch_all(&self.pool)
-        .await?;
-
-        rows.into_iter()
-            .map(|row: PgRow| {
-                let signature: String = row.get("signature");
-                let pool_address: String = row.get("pool_address");
-                let block_time: i64 = row.get("block_time");
-                let block_time_utc: DateTime<Utc> = row.get("block_time_utc");
-                let ready_for_backtesting = row.get("ready_for_backtesting");
-                let transaction_type = row.get("transaction_type");
-                let data_json: Value = row.get("data");
-
-                let transaction_data: TransactionData = serde_json::from_value(data_json)
-                    .with_context(|| {
-                        format!(
-                            "Failed to deserialize transaction data for signature: {}",
-                            signature
-                        )
-                    })?;
-
-                let transaction = TransactionModel::new(
-                    signature,
-                    pool_address,
-                    block_time,
-                    block_time_utc,
-                    transaction_type,
-                    ready_for_backtesting,
-                    transaction_data,
-                );
-
-                Ok(transaction)
-            })
-            .collect()
     }
 
     fn row_to_transaction_model(&self, row: &sqlx::postgres::PgRow) -> Result<TransactionModel> {

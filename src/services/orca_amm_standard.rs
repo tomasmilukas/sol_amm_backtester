@@ -3,7 +3,7 @@ use crate::models::transactions_model::{
     LiquidityData, SwapData, TransactionData, TransactionModel,
 };
 use crate::repositories::transactions_repo::TransactionRepo;
-use crate::services::transactions_amm_service::{constants, AMMService};
+use crate::services::transactions_sync_amm_service::{constants, AMMService};
 use crate::utils::hawksight_parsing_tx::{HawksightParser, PoolInfo};
 use crate::utils::transaction_utils::retry_with_backoff;
 
@@ -13,8 +13,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use futures::future::join_all;
 use serde_json::Value;
 
-use super::transactions_amm_service::constants::{SIGNATURE_BATCH_SIZE, TX_BATCH_SIZE};
-use super::transactions_amm_service::Cursor;
+use super::transactions_sync_amm_service::constants::{SIGNATURE_BATCH_SIZE, TX_BATCH_SIZE};
+use super::transactions_sync_amm_service::Cursor;
 
 pub struct OrcaStandardAMM {
     transaction_repo: TransactionRepo,
