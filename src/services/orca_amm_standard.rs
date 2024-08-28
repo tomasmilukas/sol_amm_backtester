@@ -29,6 +29,7 @@ pub struct CommonTransactionData {
     pub signature: String,
     pub block_time: i64,
     pub block_time_utc: DateTime<Utc>,
+    pub account_keys: Vec<String>,
 }
 
 impl OrcaStandardAMM {
@@ -121,10 +122,18 @@ impl OrcaStandardAMM {
         let block_time_utc = DateTime::<Utc>::from_timestamp(block_time, 0)
             .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
 
+        let account_keys: Vec<String> = tx_data["transaction"]["message"]["accountKeys"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Missing accountKeys"))?
+            .iter()
+            .map(|value: &serde_json::Value| value.to_string())
+            .collect::<Vec<String>>();
+
         Ok(CommonTransactionData {
             signature,
             block_time,
             block_time_utc,
+            account_keys,
         })
     }
 
@@ -216,6 +225,7 @@ impl OrcaStandardAMM {
                         amount_b,
                         tick_lower: None,
                         tick_upper: None,
+                        possible_positions: common_data.account_keys,
                     })
                 }
                 "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
@@ -226,6 +236,7 @@ impl OrcaStandardAMM {
                         amount_b,
                         tick_lower: None,
                         tick_upper: None,
+                        possible_positions: common_data.account_keys,
                     })
                 }
                 _ => return Err(anyhow::anyhow!("Unexpected transaction type")),
