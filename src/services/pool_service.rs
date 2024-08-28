@@ -5,7 +5,7 @@ use crate::utils::decode::decode_whirlpool;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 
-use super::transactions_amm_service::AMMPlatforms;
+use super::transactions_sync_amm_service::AMMPlatforms;
 
 pub struct PoolService {
     repo: PoolRepo,
