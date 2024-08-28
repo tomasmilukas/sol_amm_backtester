@@ -1577,6 +1577,7 @@ dependencies = [
  "dotenv",
  "flate2",
  "futures",
+ "hex",
  "log",
  "rand",
  "regex",

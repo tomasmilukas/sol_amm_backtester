@@ -22,17 +22,17 @@ impl TransactionRepo {
 
         for transaction in transactions {
             let result = sqlx::query(
-                r#"
-                INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, ready_for_backtesting, data)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (signature) 
-                DO UPDATE SET 
-                    pool_address = EXCLUDED.pool_address,
-                    block_time = EXCLUDED.block_time,
-                    block_time_utc = EXCLUDED.block_time_utc,
-                    transaction_type = EXCLUDED.transaction_type,
-                    data = EXCLUDED.data
-                "#
+            r#"
+            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, ready_for_backtesting, data)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (signature, transaction_type) 
+            DO UPDATE SET
+                pool_address = EXCLUDED.pool_address,
+                block_time = EXCLUDED.block_time,
+                block_time_utc = EXCLUDED.block_time_utc,
+                data = EXCLUDED.data,
+                ready_for_backtesting = EXCLUDED.ready_for_backtesting
+            "#
             )
             .bind(&transaction.signature)
             .bind(&transaction.pool_address)
