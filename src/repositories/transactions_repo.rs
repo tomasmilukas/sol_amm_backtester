@@ -15,30 +15,41 @@ impl TransactionRepo {
         Self { pool }
     }
 
-    pub async fn insert(&self, transaction: &TransactionModel) -> Result<()> {
-        let _ = sqlx::query(
+    pub async fn insert(&self, transactions: &[TransactionModel]) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+
+        let mut inserted_count = 0;
+
+        for transaction in transactions {
+            let result = sqlx::query(
             r#"
-            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, data)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (signature) 
-            DO UPDATE SET 
+            INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, ready_for_backtesting, data)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (signature, transaction_type) 
+            DO UPDATE SET
                 pool_address = EXCLUDED.pool_address,
                 block_time = EXCLUDED.block_time,
                 block_time_utc = EXCLUDED.block_time_utc,
-                transaction_type = EXCLUDED.transaction_type,
-                data = EXCLUDED.data
+                data = EXCLUDED.data,
+                ready_for_backtesting = EXCLUDED.ready_for_backtesting
             "#
-        )
-        .bind(&transaction.signature)
-        .bind(&transaction.pool_address)
-        .bind(transaction.block_time)
-        .bind(transaction.block_time_utc)
-        .bind(&transaction.transaction_type)
-        .bind(&serde_json::to_value(transaction)?)
-        .execute(&self.pool)
-        .await;
+            )
+            .bind(&transaction.signature)
+            .bind(&transaction.pool_address)
+            .bind(transaction.block_time)
+            .bind(transaction.block_time_utc)
+            .bind(&transaction.transaction_type)
+            .bind(transaction.ready_for_backtesting)
+            .bind(&serde_json::to_value(&transaction.data)?)
+            .execute(&mut tx)
+            .await?;
 
-        Ok(())
+            inserted_count += result.rows_affected() as usize;
+        }
+
+        tx.commit().await?;
+
+        Ok(inserted_count)
     }
 
     pub async fn fetch_lowest_block_time_transaction(

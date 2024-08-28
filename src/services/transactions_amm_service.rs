@@ -19,13 +19,14 @@ use super::{
 pub mod constants {
     pub const MAX_RETRIES: u32 = 5;
     pub const BASE_DELAY: u64 = 5000; // 5 seconds
-    pub const MAX_DELAY: u64 = 300_000; // 5 minutes
+    pub const MAX_DELAY: u64 = 60_000; // 1 minute
     pub const SIGNATURE_BATCH_SIZE: u32 = 1000;
-    pub const TX_BATCH_SIZE: usize = 10;
+    pub const TX_BATCH_SIZE: usize = 20;
     pub const ORCA_OPTIMIZED_PATH_BASE_URL: &str = "https://whirlpool-replay.pleiades.dev/alpha";
 }
 
 // Platforms supported.
+#[derive(Debug, Clone, Copy)]
 pub enum AMMPlatforms {
     Orca,
     Raydium,
@@ -58,28 +59,15 @@ pub trait AMMService: Send + Sync {
     ) -> Result<()>;
 
     async fn insert_transactions(&self, transactions: Vec<TransactionModel>) -> Result<()> {
-        let mut errors = Vec::new();
-
-        for model in transactions {
-            match self.repo().insert(&model).await {
-                Ok(_) => {
-                    println!(
-                        "Successfully processed tx. Current tx: {:?}",
-                        model.signature
-                    );
-                }
-                Err(e) => {
-                    let error =
-                        anyhow!("Failed to insert transaction {}: {:?}", model.signature, e);
-                    errors.push(error);
-                }
+        match self.repo().insert(&transactions).await {
+            Ok(count) => {
+                println!("Successfully inserted {} transactions", count);
+                Ok(())
             }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(anyhow!("Failed to insert some transactions: {:?}", errors))
+            Err(e) => {
+                println!("Failed to insert transactions: {:?}", e);
+                Err(anyhow!("Failed to insert transactions: {:?}", e))
+            }
         }
     }
 
@@ -145,6 +133,8 @@ pub async fn create_amm_service(
     token_b_address: &str,
     token_a_vault: &str,
     token_b_vault: &str,
+    token_a_decimals: i16,
+    token_b_decimals: i16,
 ) -> Result<Arc<dyn AMMService>> {
     match platform {
         AMMPlatforms::Orca => {
@@ -159,14 +149,21 @@ pub async fn create_amm_service(
                         transaction_api,
                         String::from(token_a_address),
                         String::from(token_b_address),
+                        token_a_decimals,
+                        token_b_decimals,
                     )
                     .await,
                 ));
             }
 
             let client = reqwest::Client::new();
+            let url = format!(
+                "{}/2024/0821/whirlpool-transaction-20240821.jsonl.gz",
+                ORCA_OPTIMIZED_PATH_BASE_URL.trim_end_matches('/')
+            );
+
             let response = client
-                .get(ORCA_OPTIMIZED_PATH_BASE_URL)
+                .head(&url)
                 .timeout(Duration::from_secs(10))
                 .send()
                 .await;
@@ -194,6 +191,8 @@ pub async fn create_amm_service(
                     transaction_api,
                     String::from(token_a_address),
                     String::from(token_b_address),
+                    token_a_decimals,
+                    token_b_decimals,
                 )
                 .await,
             ))

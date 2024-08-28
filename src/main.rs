@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool_service = PoolService::new(pool_repo.clone(), pool_api);
 
     match pool_service
-        .fetch_and_store_pool_data(&config.pool_address, platform)
+        .fetch_and_store_pool_data(&config.pool_address, platform.clone())
         .await
     {
         Ok(()) => println!("Pool data fetched and stored successfully"),
@@ -60,52 +60,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool_data = pool_service.get_pool_data(&config.pool_address).await?;
 
-    let positions_repo = PositionsRepo::new(pool.clone());
-    let positions_api = PositionsApi::new()?;
-    let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
+    // let positions_repo = PositionsRepo::new(pool.clone());
+    // let positions_api = PositionsApi::new()?;
+    // let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
 
-    match positions_service
-        .fetch_and_store_positions_data(&config.pool_address)
-        .await
-    {
-        Ok(()) => println!("Positions data fetched and stored successfully"),
-        Err(e) => eprintln!("Positions fetching related error: {}", e),
-    }
-
-    let positions_data = positions_service
-        .get_position_data(&config.pool_address)
-        .await?;
-
-    // let tx_repo = TransactionRepo::new(pool);
-    // let tx_api = TransactionApi::new()?;
-
-    // let amm_service: Arc<dyn AMMService> = match create_amm_service(
-    //     platform,
-    //     tx_repo,
-    //     tx_api,
-    //     &pool_data.token_a_address,
-    //     &pool_data.token_b_address,
-    //     &pool_data.token_a_vault,
-    //     &pool_data.token_b_vault,
-    // )
-    // .await
-    // {
-    //     Ok(service) => service,
-    //     Err(e) => {
-    //         panic!("Critical error: Failed to create AMM service: {}", e);
-    //     }
-    // };
-
-    // // Sync transactions
-    // let end_time = Utc::now();
-    // let start_time = end_time - Duration::days(config.sync_days);
-    // match amm_service
-    //     .sync_transactions(&config.pool_address, start_time, config.sync_mode)
+    // match positions_service
+    //     .fetch_and_store_positions_data(&config.pool_address)
     //     .await
     // {
-    //     Ok(_f) => println!("Synced transactions successfully"),
-    //     Err(e) => eprintln!("Error syncing transactions: {}", e),
+    //     Ok(()) => println!("Positions data fetched and stored successfully"),
+    //     Err(e) => eprintln!("Positions fetching related error: {}", e),
     // }
+
+    // let positions_data = positions_service
+    //     .get_position_data(&config.pool_address)
+    //     .await?;
+
+    let tx_repo = TransactionRepo::new(pool);
+    let tx_api = TransactionApi::new()?;
+
+    let amm_service: Arc<dyn AMMService> = match create_amm_service(
+        platform,
+        tx_repo,
+        tx_api,
+        &pool_data.token_a_address,
+        &pool_data.token_b_address,
+        &pool_data.token_a_vault,
+        &pool_data.token_b_vault,
+        pool_data.token_a_decimals,
+        pool_data.token_b_decimals,
+    )
+    .await
+    {
+        Ok(service) => service,
+        Err(e) => {
+            panic!("Critical error: Failed to create AMM service: {}", e);
+        }
+    };
+
+    println!("Transaction sync kick off!");
+
+    // Sync transactions
+    let end_time = Utc::now();
+    let start_time = end_time - Duration::days(config.sync_days);
+    match amm_service
+        .sync_transactions(&config.pool_address, start_time, config.sync_mode)
+        .await
+    {
+        Ok(_f) => println!("Synced transactions successfully"),
+        Err(e) => eprintln!("Error syncing transactions: {}", e),
+    }
 
     Ok(())
 }
