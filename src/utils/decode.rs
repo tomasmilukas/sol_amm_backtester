@@ -1,12 +1,14 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bs58;
 use byteorder::{LittleEndian, ReadBytesExt};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{Cursor, Read};
-use sha2::{Digest, Sha256};
 
 use crate::models::pool_model::Whirlpool;
 use crate::models::positions_model::{Position, PositionRewardInfo};
+
+use super::hawksight_parsing_tx::HawksightOrcaSwapData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pubkey([u8; 32]);
@@ -93,6 +95,39 @@ pub fn decode_position(data: &[u8]) -> Result<Position> {
             read_position_reward_info(&mut rdr)?,
             read_position_reward_info(&mut rdr)?,
         ],
+    })
+}
+
+pub fn decode_orca_swap_data(data: &[u8]) -> Result<HawksightOrcaSwapData> {
+    if data.len() < 34 {
+        // Minimum expected length
+        return Err(anyhow!("Data too short"));
+    }
+
+    let mut rdr = Cursor::new(data);
+
+    // Skip first 8 bytes (possibly a header)
+    rdr.set_position(8);
+
+    // Read amount (8 bytes)
+    let amount = rdr.read_u64::<LittleEndian>()?;
+
+    // Read other_amount_threshold (8 bytes)
+    let other_amount_threshold = rdr.read_u64::<LittleEndian>()?;
+
+    // Read sqrt_price_limit (8 bytes)
+    let sqrt_price_limit = rdr.read_u64::<LittleEndian>()? as u128;
+
+    // Read boolean values from the last two bytes
+    let amount_specified_is_input = data[data.len() - 2] != 0;
+    let a_to_b = data[data.len() - 1] != 0;
+
+    Ok(HawksightOrcaSwapData {
+        amount,
+        other_amount_threshold,
+        sqrt_price_limit,
+        amount_specified_is_input,
+        a_to_b,
     })
 }
 

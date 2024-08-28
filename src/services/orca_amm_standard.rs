@@ -348,6 +348,8 @@ impl AMMService for OrcaStandardAMM {
 
         for transaction in tx_data {
             if HawksightParser::is_hawksight_transaction(&transaction) {
+                println!("IS HAWKSIGHT TX");
+
                 let pool_info = PoolInfo {
                     address: pool_address.to_string(),
                     token_a: self.token_a_address.clone(),
@@ -365,8 +367,15 @@ impl AMMService for OrcaStandardAMM {
             } else {
                 match Self::determine_transaction_type(&transaction)?.as_str() {
                     "Swap" | "TwoHopSwap" => {
-                        if let Ok(swap_data) = self.convert_swap_data(&transaction, pool_address) {
-                            transactions.push(swap_data);
+                        if let Ok(transaction_model) =
+                            self.convert_swap_data(&transaction, pool_address)
+                        {
+                            if let TransactionData::Swap(swap_data) = &transaction_model.data {
+                                transactions.push(transaction_model);
+                            } else {
+                                // This block is technically unreachable if we're certain it's always swap data
+                                unreachable!("Expected Swap data for Swap transaction");
+                            }
                         }
                     }
                     "IncreaseLiquidity"
