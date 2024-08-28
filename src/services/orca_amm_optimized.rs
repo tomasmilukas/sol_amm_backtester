@@ -9,7 +9,7 @@ use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_amm_service::AMMService;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, Duration, TimeDelta, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use flate2::bufread::GzDecoder;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -275,18 +275,19 @@ impl OrcaOptimizedAMM {
         index: &str,
         is_v2: bool,
     ) -> String {
-        let key = if is_v2 {
-            format!("transfer{}", index)
+        if is_v2 {
+            payload
+                .get(&format!("transfer{}", index))
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string()
         } else {
-            format!("transferAmount{}", index)
-        };
-
-        payload
-            .get(&key)
-            .and_then(|v| v.get("amount"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("0")
-            .to_string()
+            payload
+                .get(&format!("transferAmount{}", index))
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string()
+        }
     }
 
     fn convert_two_hop_swap(
@@ -440,9 +441,11 @@ impl AMMService for OrcaOptimizedAMM {
                     "No transactions for {}. Moving to previous day.",
                     current_date
                 );
+
                 current_date = current_date
                     .pred_opt()
                     .expect("Failed to get previous date"); // Move to previous day
+
                 continue;
             }
 

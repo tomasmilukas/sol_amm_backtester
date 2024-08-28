@@ -27,15 +27,15 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
 
         r#"
         CREATE TABLE IF NOT EXISTS transactions (
-            signature TEXT PRIMARY KEY,
+            signature TEXT NOT NULL,
+            transaction_type TEXT NOT NULL,
             pool_address TEXT NOT NULL REFERENCES pools(address),
             block_time BIGINT NOT NULL,
             block_time_utc TIMESTAMPTZ NOT NULL,
-            slot BIGINT NOT NULL,
-            transaction_type TEXT NOT NULL,
             ready_for_backtesting BOOL NOT NULL,
             data JSONB NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (signature, transaction_type)
         )
         "#,
         "CREATE INDEX IF NOT EXISTS idx_transactions_pool_address ON transactions(pool_address)",
