@@ -240,6 +240,8 @@ impl OrcaOptimizedAMM {
             if is_increase { "Increase" } else { "Decrease" },
         );
 
+        let position = payload["keyPosition"].to_string();
+
         TransactionModel {
             signature: signature.to_string(),
             pool_address: pool_address.to_string(),
@@ -255,6 +257,7 @@ impl OrcaOptimizedAMM {
                     amount_b,
                     tick_lower: None,
                     tick_upper: None,
+                    possible_positions: vec![position],
                 })
             } else {
                 TransactionData::DecreaseLiquidity(LiquidityData {
@@ -264,6 +267,7 @@ impl OrcaOptimizedAMM {
                     amount_b,
                     tick_lower: None,
                     tick_upper: None,
+                    possible_positions: vec![position],
                 })
             },
         }
