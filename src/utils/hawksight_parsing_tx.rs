@@ -4,7 +4,6 @@ use crate::{
     utils::decode::decode_orca_swap_data,
 };
 use anyhow::{anyhow, Result};
-use base64;
 use serde_json::Value;
 
 pub struct HawksightParser;
@@ -42,9 +41,6 @@ impl HawksightParser {
         pool_info: &PoolInfo,
         common_data: &CommonTransactionData,
     ) -> Result<Vec<TransactionModel>> {
-        println!("INSIDE HAWKSIGHT");
-        println!("SIG: {}", common_data.signature);
-
         let mut transactions = Vec::new();
 
         let log_messages = transaction["meta"]["logMessages"]
@@ -53,8 +49,6 @@ impl HawksightParser {
 
         let mut swap_data = None;
         let mut liquidity_data = None;
-
-        println!("START PARSING LOGS");
 
         for message in log_messages {
             let message = message.as_str().unwrap_or("");
@@ -70,11 +64,7 @@ impl HawksightParser {
             }
         }
 
-        println!("PASSED LOG MESSAGES?");
-
         if let Some(swap) = swap_data {
-            println!("SWAP DATA: {:?}", swap);
-
             transactions.push(TransactionModel {
                 signature: common_data.signature.clone(),
                 pool_address: pool_info.address.clone(),
@@ -87,8 +77,6 @@ impl HawksightParser {
         }
 
         if let Some(liquidity) = liquidity_data {
-            println!("LIQDUIITY DATA: {:?}", liquidity);
-
             transactions.push(TransactionModel {
                 signature: common_data.signature.clone(),
                 pool_address: pool_info.address.clone(),
@@ -100,8 +88,6 @@ impl HawksightParser {
             });
         }
 
-        println!("TRANSACTIONS FINAL: {:?}", transactions);
-
         Ok(transactions)
     }
 
@@ -110,54 +96,50 @@ impl HawksightParser {
         log_messages: &Vec<Value>,
         pool_info: &PoolInfo,
     ) -> Result<SwapData> {
-        // Find the "Instruction: Swap" log and the invoke above it
-        let (invoke_depth, invoke_count) = log_messages
+        // Find the "Instruction: Swap" log
+        let swap_index = log_messages
             .iter()
-            .enumerate()
-            .find_map(|(i, msg)| {
-                let msg_str = msg.as_str()?;
-                if msg_str == "Program log: Instruction: Swap" {
-                    let invoke_msg = log_messages.get(i - 1)?;
-                    let invoke_str = invoke_msg.as_str()?;
-                    if invoke_str
-                        .starts_with("Program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc invoke [")
-                    {
-                        let depth = invoke_str
-                            .split('[')
-                            .nth(1)?
-                            .split(']')
-                            .next()?
-                            .parse::<usize>()
-                            .ok()?;
-                        return Some((depth, i));
-                    }
-                }
-                None
-            })
+            .position(|msg| msg.as_str() == Some("Program log: Instruction: Swap"))
             .ok_or_else(|| anyhow!("Swap instruction not found"))?;
 
+        let invoke_log = log_messages[swap_index - 1].as_str().unwrap();
+
+        // Extract the invoke nmr near swap
+        let invoke_nmr_on_swap = invoke_log
+            .split('[')
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .and_then(|s| s.parse::<usize>().ok())
+            .ok_or_else(|| anyhow!("Failed to parse invoke depth"))?;
+
+        // Count the number of invoke logs with the same depth up until swap index.
+        let invoke_count = log_messages[0..swap_index]
+            .iter()
+            .filter(|msg| {
+                msg.as_str().map_or(false, |s| {
+                    s.contains(&format!("invoke [{}]", invoke_nmr_on_swap))
+                })
+            })
+            .count();
+
         // Find the corresponding inner instruction
-        let inner_instructions = transaction["meta"]["innerInstructions"]
+        let inner_instructions = transaction["meta"]["innerInstructions"][0]["instructions"]
             .as_array()
             .ok_or_else(|| anyhow!("Missing innerInstructions"))?;
 
-        let swap_inner_instruction = inner_instructions
+        let swap_filtered_inner_instruction: Vec<&Value> = inner_instructions
             .iter()
-            .find(|instr| instr["index"] == invoke_count - 1)
-            .ok_or_else(|| anyhow!("Swap inner instruction not found"))?;
+            .filter(|instr| instr["stackHeight"] == invoke_nmr_on_swap)
+            .collect();
 
-        // Find the instruction with matching stack height
-        let swap_data_instruction = swap_inner_instruction["instructions"]
-            .as_array()
-            .and_then(|instrs| instrs.iter().find(|i| i["stackHeight"] == invoke_depth))
-            .ok_or_else(|| anyhow!("Swap data instruction not found"))?;
-
-        let encoded_data = swap_data_instruction["data"]
+        let data = swap_filtered_inner_instruction[invoke_count - 1]["data"]
             .as_str()
             .ok_or_else(|| anyhow!("Swap data not found"))?;
 
-        let decoded_data = base64::decode(encoded_data)?;
-        let swap_data = decode_orca_swap_data(&decoded_data)?;
+        // the data is originally base58 so we convert to bytes.
+        let decoded_bytes = bs58::decode(data).into_vec().unwrap();
+
+        let swap_data = decode_orca_swap_data(&decoded_bytes as &[u8])?;
 
         // Extract price_numerator from logs
         let price_numerator = log_messages
@@ -207,8 +189,6 @@ impl HawksightParser {
         log_messages: &[Value],
         pool_info: &PoolInfo,
     ) -> Result<LiquidityData> {
-        println!("IN LIQUIDITY");
-
         let mut amount_a = 0.0;
         let mut amount_b = 0.0;
 
@@ -243,8 +223,6 @@ impl HawksightParser {
                 tick_upper = Some(tick_upper_result)
             }
         }
-
-        println!("PASSED LIQUIDITY PRICING");
 
         if amount_a == 0.0 || amount_b == 0.0 {
             return Err(anyhow!("Failed to extract liquidity data from logs"));
