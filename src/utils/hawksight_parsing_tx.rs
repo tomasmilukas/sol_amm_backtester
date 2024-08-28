@@ -60,7 +60,11 @@ impl HawksightParser {
                     pool_info,
                 )?);
             } else if message.contains("Instruction: IncreaseLiquidity") {
-                liquidity_data = Some(Self::extract_liquidity_from_logs(log_messages, pool_info)?);
+                liquidity_data = Some(Self::extract_liquidity_from_logs(
+                    log_messages,
+                    pool_info,
+                    common_data.account_keys.clone(),
+                )?);
             }
         }
 
@@ -188,6 +192,7 @@ impl HawksightParser {
     fn extract_liquidity_from_logs(
         log_messages: &[Value],
         pool_info: &PoolInfo,
+        account_keys: Vec<String>,
     ) -> Result<LiquidityData> {
         let mut amount_a = 0.0;
         let mut amount_b = 0.0;
@@ -236,6 +241,7 @@ impl HawksightParser {
             amount_b,
             tick_lower,
             tick_upper,
+            possible_positions: account_keys,
         })
     }
 }
