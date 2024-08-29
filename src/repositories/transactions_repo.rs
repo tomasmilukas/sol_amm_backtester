@@ -4,6 +4,7 @@ use sqlx::Row;
 
 use crate::models::transactions_model::{TransactionModel, TransactionModelFromDB};
 
+#[derive(Clone)]
 pub struct TransactionRepo {
     pool: PgPool,
 }

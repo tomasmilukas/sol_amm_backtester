@@ -23,7 +23,10 @@ use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
 use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
-use services::{positions_service::PositionsService, transactions_sync_amm_service::create_amm_service};
+use services::{
+    positions_service::PositionsService, transactions_service::TransactionsService,
+    transactions_sync_amm_service::create_amm_service,
+};
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc};
 
@@ -62,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let positions_repo = PositionsRepo::new(pool.clone());
     let positions_api = PositionsApi::new()?;
-    let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
+    let positions_service = PositionsService::new(positions_repo.clone(), pool_repo, positions_api);
 
     match positions_service
         .fetch_and_store_positions_data(&config.pool_address)
@@ -77,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let amm_service: Arc<dyn AMMService> = match create_amm_service(
         platform,
-        tx_repo,
+        tx_repo.clone(),
         tx_api,
         &pool_data.token_a_address,
         &pool_data.token_b_address,
@@ -107,7 +110,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
 
+    println!("Transactions synced, time to fill in missing data!");
+
     // Update transactions since not all data can be retrieved during sync. Updates will happen using position_data, to fill in liquidity info.
+    let transactions_service = TransactionsService::new(tx_repo, positions_repo);
+
+    match transactions_service
+        .update_and_fill_transactions(&config.pool_address)
+        .await
+    {
+        Ok(_f) => println!("Updated txs successfully"),
+        Err(e) => eprintln!("Error updating txs: {}", e),
+    }
 
     Ok(())
 }
