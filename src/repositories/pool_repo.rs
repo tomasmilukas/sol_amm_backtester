@@ -1,4 +1,4 @@
-use crate::{models::pool_model::PoolModel, services::transactions_amm_service::AMMPlatforms};
+use crate::{models::pool_model::PoolModel, services::transactions_sync_amm_service::AMMPlatforms};
 use chrono::Utc;
 use sqlx::{query, query_as, Pool, Postgres};
 

@@ -110,8 +110,12 @@ pub trait AMMService: Send + Sync {
 
         match lowest_block_tx {
             Some(tx) => {
-                self.fetch_and_insert_transactions(pool_address, start_time, Some(tx))
-                    .await
+                self.fetch_and_insert_transactions(
+                    pool_address,
+                    start_time,
+                    Some(tx.transform_to_tx_model()),
+                )
+                .await
             }
             None => Err(anyhow!(
                 "No existing transactions found for historical sync"

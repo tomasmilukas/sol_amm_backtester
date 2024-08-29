@@ -1,14 +1,14 @@
 use crate::api::transactions_api::{SignatureInfo, TransactionApi};
 use crate::models::transactions_model::TransactionModel;
 use crate::repositories::transactions_repo::TransactionRepo;
-use crate::services::transactions_amm_service::{constants, AMMService};
+use crate::services::transactions_sync_amm_service::{constants, AMMService};
 use crate::utils::transaction_utils::retry_with_backoff;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::transactions_amm_service::Cursor;
+use super::transactions_sync_amm_service::Cursor;
 
 pub struct RaydiumAMM {
     transaction_repo: TransactionRepo,
