@@ -36,7 +36,7 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             ready_for_backtesting BOOL NOT NULL,
             data JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (signature, pool_address ,transaction_type)
+            UNIQUE (signature, pool_address, transaction_type)
         )
         "#,
         "CREATE INDEX IF NOT EXISTS idx_transactions_pool_address ON transactions(pool_address)",
