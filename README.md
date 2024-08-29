@@ -1,4 +1,4 @@
-# CLMM backtester (WIP - not ready)
+# CLMM backtester
 
 Will probably be done in 5 days.
 
