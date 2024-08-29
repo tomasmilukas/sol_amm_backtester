@@ -4,7 +4,8 @@ use sqlx::FromRow;
 
 use crate::utils::decode::Pubkey;
 
-#[derive(Debug, FromRow, Serialize, Deserialize)]
+#[derive(Debug, FromRow, Serialize, Deserialize, Clone)]
+
 pub struct PositionModel {
     pub address: String,
     pub liquidity: u128,
@@ -38,12 +39,7 @@ pub struct PositionRewardInfo {
 const NUM_REWARDS: usize = 3;
 
 impl PositionModel {
-    pub fn new(
-        address: String,
-        liquidity: u128,
-        tick_lower: i32,
-        tick_upper: i32,
-    ) -> Self {
+    pub fn new(address: String, liquidity: u128, tick_lower: i32, tick_upper: i32) -> Self {
         Self {
             address,
             liquidity,
