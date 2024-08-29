@@ -37,6 +37,7 @@ pub struct LiquidityData {
     pub amount_b: f64,
     pub tick_lower: Option<u64>,
     pub tick_upper: Option<u64>,
+    pub possible_positions: Vec<String>,
 }
 
 impl TransactionModel {

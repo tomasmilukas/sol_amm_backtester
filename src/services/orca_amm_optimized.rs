@@ -118,12 +118,12 @@ impl OrcaOptimizedAMM {
                 matches!(
                     name,
                     "swap"
+                        | "swapV2"
                         | "decreaseLiquidity"
                         | "increaseLiquidity"
                         | "twoHopSwap"
                         | "increaseLiquidityV2"
                         | "decreaseLiquidityV2"
-                        | "openPositionWithMetadata"
                 ) && (payload.get("keyWhirlpool") == Some(&Value::String(pool_address.to_string()))
                     || payload.get("keyWhirlpoolOne")
                         == Some(&Value::String(pool_address.to_string()))
@@ -146,7 +146,7 @@ impl OrcaOptimizedAMM {
         for instruction in instructions {
             if let Some(name) = instruction["name"].as_str() {
                 return match name {
-                    "swap" => {
+                    "swap" | "swapV2" => {
                         Some(self.convert_swap(pool_address, &signature, instruction, block_time))
                     }
                     "increaseLiquidity" | "increaseLiquidityV2" => Some(self.convert_liquidity(
@@ -183,24 +183,42 @@ impl OrcaOptimizedAMM {
     ) -> TransactionModel {
         let payload = instruction["payload"].as_object().unwrap();
         let data_a_to_b = payload["dataAToB"].as_i64().unwrap_or(0) == 1;
+        let is_v2 = instruction["name"].as_str().unwrap().ends_with("V2");
 
         let (token_in, token_out) = if data_a_to_b {
             (&self.token_a_address, &self.token_b_address)
         } else {
             (&self.token_b_address, &self.token_a_address)
         };
-
-        let amount_in = payload["transferAmount0"]
-            .as_str()
-            .unwrap_or("0")
-            .parse::<f64>()
-            .unwrap_or(0.0);
-        let amount_out = payload["transferAmount1"]
-            .as_str()
-            .unwrap_or("0")
-            .parse::<f64>()
-            .unwrap_or(0.0);
-
+        let (amount_in, amount_out) = if is_v2 {
+            let transfer0 = payload["transfer0"].as_object().unwrap();
+            let transfer1 = payload["transfer1"].as_object().unwrap();
+            (
+                transfer0["amount"]
+                    .as_str()
+                    .unwrap_or("0")
+                    .parse::<f64>()
+                    .unwrap_or(0.0),
+                transfer1["amount"]
+                    .as_str()
+                    .unwrap_or("0")
+                    .parse::<f64>()
+                    .unwrap_or(0.0),
+            )
+        } else {
+            (
+                payload["transferAmount0"]
+                    .as_str()
+                    .unwrap_or("0")
+                    .parse::<f64>()
+                    .unwrap_or(0.0),
+                payload["transferAmount1"]
+                    .as_str()
+                    .unwrap_or("0")
+                    .parse::<f64>()
+                    .unwrap_or(0.0),
+            )
+        };
         TransactionModel {
             signature: signature.to_string(),
             pool_address: pool_address.to_string(),
@@ -240,6 +258,8 @@ impl OrcaOptimizedAMM {
             if is_increase { "Increase" } else { "Decrease" },
         );
 
+        let position = payload["keyPosition"].to_string();
+
         TransactionModel {
             signature: signature.to_string(),
             pool_address: pool_address.to_string(),
@@ -255,6 +275,7 @@ impl OrcaOptimizedAMM {
                     amount_b,
                     tick_lower: None,
                     tick_upper: None,
+                    possible_positions: vec![position],
                 })
             } else {
                 TransactionData::DecreaseLiquidity(LiquidityData {
@@ -264,6 +285,7 @@ impl OrcaOptimizedAMM {
                     amount_b,
                     tick_lower: None,
                     tick_upper: None,
+                    possible_positions: vec![position],
                 })
             },
         }
