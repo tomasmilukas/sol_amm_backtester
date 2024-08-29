@@ -11,11 +11,13 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use serde_json::Value;
 
 use super::transactions_sync_amm_service::constants::{SIGNATURE_BATCH_SIZE, TX_BATCH_SIZE};
 use super::transactions_sync_amm_service::Cursor;
 
+#[derive(Clone)]
 pub struct OrcaStandardAMM {
     transaction_repo: TransactionRepo,
     transaction_api: TransactionApi,
@@ -72,7 +74,7 @@ impl OrcaStandardAMM {
 
     async fn fetch_transactions_from_signatures(
         &self,
-        signatures: &[String],
+        signatures: &Vec<String>,
     ) -> Result<Vec<serde_json::Value>> {
         retry_with_backoff(
             || self.transaction_api.fetch_transaction_data(signatures),
@@ -322,28 +324,45 @@ impl AMMService for OrcaStandardAMM {
             .filter(|sig| sig.err.is_none())
             .collect();
 
-        let mut all_relevant_transactions = Vec::new();
+        println!(
+            "Fetched filtered signatures: {}. Now fetching txs.",
+            filtered_signatures.len()
+        );
 
-        // Process transactions in batches of 10
-        for chunk in filtered_signatures.chunks(TX_BATCH_SIZE) {
-            let signature_strings: Vec<String> =
-                chunk.iter().map(|sig| sig.signature.clone()).collect();
+        let signature_chunks: Vec<Vec<String>> = filtered_signatures
+            .chunks(TX_BATCH_SIZE)
+            .map(|chunk| chunk.iter().map(|sig| sig.signature.clone()).collect())
+            .collect();
 
-            let tx_data_batch = self
-                .fetch_transactions_from_signatures(&signature_strings)
-                .await?;
+        let fetch_futures = signature_chunks.into_iter().map(|chunk| {
+            let chunk_clone = chunk.clone(); // Clone the chunk
+            async move { self.fetch_transactions_from_signatures(&chunk_clone).await }
+        });
 
-            let futures = tx_data_batch.into_iter().map(|tx_data| async move {
-                if Self::determine_transaction_type(&tx_data).is_ok() {
-                    Some(tx_data)
-                } else {
-                    None
-                }
-            });
+        let all_tx_data: Vec<Value> = stream::iter(fetch_futures)
+            .buffer_unordered(3)
+            .flat_map(|result| stream::iter(result.unwrap_or_default()))
+            .collect()
+            .await;
 
-            let batch_results = join_all(futures).await;
-            all_relevant_transactions.extend(batch_results.into_iter().filter_map(|x| x));
-        }
+        let futures = all_tx_data.into_iter().map(|tx_data| async move {
+            if Self::determine_transaction_type(&tx_data).is_ok() {
+                Some(tx_data)
+            } else {
+                None
+            }
+        });
+
+        let all_relevant_transactions: Vec<Value> = join_all(futures)
+            .await
+            .into_iter()
+            .filter_map(|x| x)
+            .collect();
+
+        println!(
+            "Processed {} relevant transactions.",
+            all_relevant_transactions.len()
+        );
 
         Ok(all_relevant_transactions)
     }
@@ -357,8 +376,6 @@ impl AMMService for OrcaStandardAMM {
 
         for transaction in tx_data {
             if HawksightParser::is_hawksight_transaction(&transaction) {
-                println!("IS HAWKSIGHT TX");
-
                 let pool_info = PoolInfo {
                     address: pool_address.to_string(),
                     token_a: self.token_a_address.clone(),
