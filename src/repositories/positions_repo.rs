@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{prelude::FromRow, query_as, Pool, Postgres, Transaction};
 use std::str::FromStr;
 
+#[derive(Clone)]
 pub struct PositionsRepo {
     db: Pool<Postgres>,
 }

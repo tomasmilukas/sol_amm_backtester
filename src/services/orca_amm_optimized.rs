@@ -6,7 +6,7 @@ use crate::models::transactions_model::{
     LiquidityData, SwapData, TransactionData, TransactionModel,
 };
 use crate::repositories::transactions_repo::TransactionRepo;
-use crate::services::transactions_amm_service::AMMService;
+use crate::services::transactions_sync_amm_service::AMMService;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
@@ -14,8 +14,8 @@ use flate2::bufread::GzDecoder;
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use super::transactions_amm_service::constants::ORCA_OPTIMIZED_PATH_BASE_URL;
-use super::transactions_amm_service::Cursor;
+use super::transactions_sync_amm_service::constants::ORCA_OPTIMIZED_PATH_BASE_URL;
+use super::transactions_sync_amm_service::Cursor;
 
 pub struct OrcaOptimizedAMM {
     transaction_repo: TransactionRepo,
