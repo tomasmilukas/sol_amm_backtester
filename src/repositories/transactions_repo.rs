@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use serde_json::Value;
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use crate::models::transactions_model::{TransactionData, TransactionModel};
+use crate::models::transactions_model::{TransactionModel, TransactionModelFromDB};
 
 pub struct TransactionRepo {
     pool: PgPool,
@@ -54,7 +52,7 @@ impl TransactionRepo {
 
     pub async fn upsert_liquidity_transactions(
         &self,
-        transactions: &[TransactionModel],
+        transactions: &Vec<TransactionModelFromDB>,
     ) -> Result<usize> {
         let mut tx = self.pool.begin().await?;
 
@@ -102,7 +100,7 @@ impl TransactionRepo {
         &self,
         last_tx_id: i64,
         limit: i64,
-    ) -> Result<Vec<TransactionModel>> {
+    ) -> Result<Vec<TransactionModelFromDB>> {
         let rows = sqlx::query(
             r#"
             SELECT 
@@ -127,7 +125,7 @@ impl TransactionRepo {
     pub async fn fetch_lowest_block_time_transaction(
         &self,
         pool_address: &str,
-    ) -> Result<Option<TransactionModel>> {
+    ) -> Result<Option<TransactionModelFromDB>> {
         let result = sqlx::query(
             r#"
             SELECT * FROM transactions 
@@ -148,7 +146,7 @@ impl TransactionRepo {
     pub async fn fetch_highest_block_time_transaction(
         &self,
         pool_address: &str,
-    ) -> Result<Option<TransactionModel>> {
+    ) -> Result<Option<TransactionModelFromDB>> {
         let result = sqlx::query(
             r#"
             SELECT * FROM transactions 
@@ -166,8 +164,12 @@ impl TransactionRepo {
             .transpose()
     }
 
-    fn row_to_transaction_model(&self, row: &sqlx::postgres::PgRow) -> Result<TransactionModel> {
-        Ok(TransactionModel {
+    fn row_to_transaction_model(
+        &self,
+        row: &sqlx::postgres::PgRow,
+    ) -> Result<TransactionModelFromDB> {
+        Ok(TransactionModelFromDB {
+            tx_id: row.try_get("tx_id").context("Failed to get tx_id")?,
             signature: row.get("signature"),
             pool_address: row.get("pool_address"),
             block_time: row.get("block_time"),
