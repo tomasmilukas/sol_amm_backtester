@@ -29,6 +29,7 @@ pub struct CommonTransactionData {
     pub signature: String,
     pub block_time: i64,
     pub block_time_utc: DateTime<Utc>,
+    pub account_keys: Vec<String>,
 }
 
 impl OrcaStandardAMM {
@@ -90,7 +91,7 @@ impl OrcaStandardAMM {
 
         for message in log_messages {
             let message = message.as_str().unwrap_or("");
-            if message.contains("Instruction: Swap") {
+            if message.contains("Instruction: Swap") || message.contains("Instruction: SwapV2") {
                 return Ok("Swap".to_string());
             } else if message.contains("Instruction: TwoHopSwap") {
                 return Ok("TwoHopSwap".to_string());
@@ -121,10 +122,18 @@ impl OrcaStandardAMM {
         let block_time_utc = DateTime::<Utc>::from_timestamp(block_time, 0)
             .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
 
+        let account_keys: Vec<String> = tx_data["transaction"]["message"]["accountKeys"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Missing accountKeys"))?
+            .iter()
+            .map(|value: &serde_json::Value| value.to_string())
+            .collect::<Vec<String>>();
+
         Ok(CommonTransactionData {
             signature,
             block_time,
             block_time_utc,
+            account_keys,
         })
     }
 
@@ -216,6 +225,7 @@ impl OrcaStandardAMM {
                         amount_b,
                         tick_lower: None,
                         tick_upper: None,
+                        possible_positions: common_data.account_keys,
                     })
                 }
                 "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
@@ -226,6 +236,7 @@ impl OrcaStandardAMM {
                         amount_b,
                         tick_lower: None,
                         tick_upper: None,
+                        possible_positions: common_data.account_keys,
                     })
                 }
                 _ => return Err(anyhow::anyhow!("Unexpected transaction type")),
@@ -235,8 +246,6 @@ impl OrcaStandardAMM {
 
     fn convert_swap_data(&self, tx_data: &Value, pool_address: &str) -> Result<TransactionModel> {
         let common_data = self.extract_common_data(tx_data)?;
-        let transaction_type = Self::determine_transaction_type(tx_data)?;
-
         let (token_in, token_out, amount_in, amount_out) =
             self.extract_swap_amounts(tx_data, pool_address)?;
 
@@ -245,7 +254,7 @@ impl OrcaStandardAMM {
             pool_address: pool_address.to_string(),
             block_time: common_data.block_time,
             block_time_utc: common_data.block_time_utc,
-            transaction_type,
+            transaction_type: "Swap".to_string(),
             ready_for_backtesting: true,
             data: TransactionData::Swap(SwapData {
                 token_in,
@@ -373,7 +382,7 @@ impl AMMService for OrcaStandardAMM {
                             if let TransactionData::Swap(swap_data) = &transaction_model.data {
                                 transactions.push(transaction_model);
                             } else {
-                                // This block is technically unreachable if we're certain it's always swap data
+                                // This block is technically unreachable bcos it will always be swap data.
                                 unreachable!("Expected Swap data for Swap transaction");
                             }
                         }
