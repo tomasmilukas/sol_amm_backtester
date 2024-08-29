@@ -27,6 +27,7 @@ pub struct SignatureInfo {
     pub err: Option<Value>,
 }
 
+#[derive(Clone)]
 pub struct TransactionApi {
     client: reqwest::Client,
     alchemy_api_key: String,
