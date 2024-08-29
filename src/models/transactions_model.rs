@@ -28,7 +28,7 @@ pub struct TransactionModelFromDB {
     pub data: TransactionData,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "transaction_type", content = "data")]
 pub enum TransactionData {
     Swap(SwapData),
@@ -36,7 +36,7 @@ pub enum TransactionData {
     DecreaseLiquidity(LiquidityData),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SwapData {
     pub token_in: String,
     pub token_out: String,
@@ -74,6 +74,20 @@ impl TransactionModel {
             ready_for_backtesting,
             data,
         }
+    }
+}
+
+impl TransactionModelFromDB {
+    pub fn transform_to_tx_model(&self) -> TransactionModel {
+        (TransactionModel {
+            signature: self.signature.clone(),
+            pool_address: self.pool_address.clone(),
+            block_time: self.block_time,
+            block_time_utc: self.block_time_utc,
+            transaction_type: self.transaction_type.clone(),
+            ready_for_backtesting: self.ready_for_backtesting,
+            data: self.data.clone(),
+        })
     }
 }
 

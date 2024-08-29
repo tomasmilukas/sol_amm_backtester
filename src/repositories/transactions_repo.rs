@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sqlx::postgres::{PgPool, PgRow};
+use sqlx::postgres::PgPool;
 use sqlx::Row;
 
 use crate::models::transactions_model::{TransactionModel, TransactionModelFromDB};
@@ -24,7 +24,7 @@ impl TransactionRepo {
             r#"
             INSERT INTO transactions (signature, pool_address, block_time, block_time_utc, transaction_type, ready_for_backtesting, data)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (signature, transaction_type) 
+            ON CONFLICT (signature, pool_address, transaction_type) 
             DO UPDATE SET
                 pool_address = EXCLUDED.pool_address,
                 block_time = EXCLUDED.block_time,
@@ -72,7 +72,7 @@ impl TransactionRepo {
                     data
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (signature, transaction_type)
+                ON CONFLICT (signature, pool_address, transaction_type)
                 DO UPDATE SET
                     data = EXCLUDED.data,
                     ready_for_backtesting = EXCLUDED.ready_for_backtesting
@@ -104,13 +104,16 @@ impl TransactionRepo {
     ) -> Result<Vec<TransactionModelFromDB>> {
         let rows = sqlx::query(
             r#"
-            SELECT 
-                tx_id, signature, pool_address, block_time, block_time_utc, 
-                transaction_type, ready_for_backtesting, data
-            FROM transactions
-            WHERE tx_id > $1 AND ready_for_backtesting = FALSE
-            ORDER BY tx_id
-            LIMIT $2
+                SELECT
+                    tx_id, signature, pool_address, block_time, block_time_utc,
+                    transaction_type, ready_for_backtesting, data
+                FROM transactions
+                WHERE 
+                    tx_id > $1 
+                    AND ready_for_backtesting = FALSE
+                    AND transaction_type IN ('IncreaseLiquidity', 'DecreaseLiquidity')
+                ORDER BY tx_id
+                LIMIT $2
             "#,
         )
         .bind(last_tx_id)
@@ -177,8 +180,7 @@ impl TransactionRepo {
             block_time_utc: row.get("block_time_utc"),
             transaction_type: row.get("transaction_type"),
             ready_for_backtesting: row.get("ready_for_backtesting"),
-            data: serde_json::from_value(row.get("transaction_data"))
-                .context("Failed to deserialize transaction_data")?,
+            data: serde_json::from_value(row.get("data")).context("Failed to deserialize data")?,
         })
     }
 }
