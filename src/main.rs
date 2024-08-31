@@ -17,11 +17,13 @@ use crate::{
     },
 };
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use api::{positions_api::PositionsApi, transactions_api::TransactionApi};
+use backtester::liquidity_range_calculator::create_full_liquidity_range;
 use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
+use models::positions_model::Position;
 use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use services::{
     positions_service::PositionsService, transactions_service::TransactionsService,
@@ -169,7 +171,21 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
         .await?;
 
     let pool_repo = PoolRepo::new(pool.clone());
+    let pool_api = PoolApi::new()?;
+    let pool_service = PoolService::new(pool_repo.clone(), pool_api);
+
+    let pool_data = pool_service.get_pool_data(&config.pool_address).await?;
+
     let positions_repo = PositionsRepo::new(pool.clone());
+    let positions_api = PositionsApi::new()?;
+    let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
+
+    let positions_data = positions_service
+        .get_position_data(&config.pool_address)
+        .await?;
+
+    let liquidity_range_arr = create_full_liquidity_range(pool_data.tick_spacing, positions_data);
+
     let tx_repo = TransactionRepo::new(pool);
 
     Ok(())

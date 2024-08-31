@@ -88,21 +88,21 @@ impl<S: Strategy> Backtester<S> {
         match transaction.transaction_type.as_str() {
             "Swap" => {
                 if let TransactionData::Swap(swap_data) = &transaction.data {
-                    self.process_swap(swap_data, transaction.block_time_utc);
+                    // self.process_swap(swap_data, transaction.block_time_utc);
                 } else {
                     println!("Error: Mismatch between transaction_type and data");
                 }
             }
             "IncreaseLiquidity" => {
                 if let TransactionData::IncreaseLiquidity(liquidity_data) = &transaction.data {
-                    self.process_increase_liquidity(liquidity_data, transaction.block_time_utc);
+                    // self.process_increase_liquidity(liquidity_data, transaction.block_time_utc);
                 } else {
                     println!("Error: Mismatch between transaction_type and data");
                 }
             }
             "DecreaseLiquidity" => {
                 if let TransactionData::DecreaseLiquidity(liquidity_data) = &transaction.data {
-                    self.process_decrease_liquidity(liquidity_data, transaction.block_time_utc);
+                    // self.process_decrease_liquidity(liquidity_data, transaction.block_time_utc);
                 } else {
                     println!("Error: Mismatch between transaction_type and data");
                 }
@@ -144,15 +144,18 @@ impl<S: Strategy> Backtester<S> {
 
     fn execute_action(&mut self, action: Action) {
         match action {
-            Action::Unstake { amount } => {
+            Action::Unstake {
+                amount,
+                fees_earned,
+            } => {
                 if let Some(position) = &mut self.state.position {
-                    let (tokens_a, tokens_b) = self.calculate_unstake_amounts(amount);
-                    position.liquidity -= amount;
-                    self.state.wallet.token_a += tokens_a;
-                    self.state.wallet.token_b += tokens_b;
-                    if position.liquidity == 0.0 {
-                        self.state.position = None;
-                    }
+                    // let (tokens_a, tokens_b) = self.calculate_unstake_amounts(amount);
+                    // position.liquidity -= amount;
+                    // self.state.wallet.token_a += tokens_a;
+                    // self.state.wallet.token_b += tokens_b;
+                    // if position.liquidity == 0.0 {
+                    //     self.state.position = None;
+                    // }
                 }
             }
             Action::Stake {
@@ -171,21 +174,17 @@ impl<S: Strategy> Backtester<S> {
                         liquidity: amount,
                         lower_tick,
                         upper_tick,
-                        fee_growth_inside_a: self.state.pool.fee_growth_global_a,
-                        fee_growth_inside_b: self.state.pool.fee_growth_global_b,
-                        tokens_owed_a: 0.0,
-                        tokens_owed_b: 0.0,
                     };
                     self.state.position = Some(new_position);
                 }
             }
             Action::Swap {
-                token_in,
-                amount_in,
-                token_out,
+                token_buy,
+                amount_sell,
+                token_sell,
             } => {
-                let amount_out = self.simulate_swap(token_in, amount_in, token_out);
-                match token_in {}
+                // let amount_out = self.simulate_swap(token_in, amount_in, token_out);
+                // match token_in {}
             }
             Action::DoNothing => {}
         }
@@ -211,19 +210,19 @@ impl<S: Strategy> Backtester<S> {
 
     fn run(&mut self, start_time: DateTime<Utc>, end_time: DateTime<Utc>) {
         // let mut cursor = None;
+        println!("Nothing to see!")
+        // loop {
+        //     // let (transactions, new_cursor) = self
+        //     //     .transaction_repo
+        //     //     .get_transactions(start_time, end_time, cursor);
 
-        loop {
-            // let (transactions, new_cursor) = self
-            //     .transaction_repo
-            //     .get_transactions(start_time, end_time, cursor);
-
-            // for transaction in transactions {
-            //     self.process_transaction(&transaction);
-            // }
-            // if new_cursor.is_none() {
-            //     break;
-            // }
-            // cursor = new_cursor;
-        }
+        //     // for transaction in transactions {
+        //     //     self.process_transaction(&transaction);
+        //     // }
+        //     // if new_cursor.is_none() {
+        //     //     break;
+        //     // }
+        //     // cursor = new_cursor;
+        // }
     }
 }
