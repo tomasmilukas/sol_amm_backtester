@@ -184,7 +184,7 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
         .get_position_data(&config.pool_address)
         .await?;
 
-    let liquidity_range_arr = create_full_liquidity_range(pool_data.tick_spacing, positions_data);
+    let liquidity_range_arr = create_full_liquidity_range(pool_data.tick_spacing, positions_data)?;
 
     let tx_repo = TransactionRepo::new(pool);
 
