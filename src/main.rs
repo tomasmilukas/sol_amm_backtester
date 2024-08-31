@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use api::{positions_api::PositionsApi, transactions_api::TransactionApi};
 use chrono::{Duration, Utc};
 use config::AppConfig;
@@ -35,6 +35,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
     let config = AppConfig::from_env()?;
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 2 {
+        println!("Usage: cargo run [sync|backtest] [options]");
+        return Ok(());
+    }
+
+    match args[1].as_str() {
+        "sync" => {
+            let days = if args.len() > 2 {
+                args[2].parse().unwrap_or(config.sync_days)
+            } else {
+                config.sync_days
+            };
+            sync_data(&config, days).await?;
+        }
+        "backtest" => {
+            if args.len() < 3 {
+                println!("Usage: cargo run backtest <strategy_name>");
+                return Ok(());
+            }
+            let strategy = &args[2];
+            run_backtest(&config, strategy).await?;
+        }
+        _ => {
+            println!("Unknown command. Use 'sync' or 'backtest'.");
+        }
+    }
+
+    Ok(())
+}
+
+async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
+    println!("Syncing data for the last {} days", days);
 
     let platform = env::var("POOL_PLATFORM")
         .context("POOL_PLATFORM environment variable not set")?
@@ -103,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
     match amm_service
-        .sync_transactions(&config.pool_address, start_time, config.sync_mode)
+        .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
         .await
     {
         Ok(_f) => println!("Synced transactions successfully"),
@@ -122,6 +156,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_f) => println!("Updated txs successfully"),
         Err(e) => eprintln!("Error updating txs: {}", e),
     }
+
+    Ok(())
+}
+
+async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
+    println!("Running backtest with strategy: {}", strategy);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&config.database_url)
+        .await?;
+
+    let pool_repo = PoolRepo::new(pool.clone());
+    let positions_repo = PositionsRepo::new(pool.clone());
+    let tx_repo = TransactionRepo::new(pool);
 
     Ok(())
 }
