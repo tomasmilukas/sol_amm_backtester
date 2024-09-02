@@ -35,6 +35,7 @@ impl HawksightParser {
         pool_info: &PoolInfo,
         common_data: &CommonTransactionData,
     ) -> Result<Vec<TransactionModel>> {
+        println!("HAWKSIGHT TX: {}", common_data.signature);
         let mut transactions = Vec::new();
 
         let log_messages = transaction["meta"]["logMessages"]
@@ -200,7 +201,7 @@ impl HawksightParser {
             token_b: pool_info.token_b.clone(),
             amount_a,
             amount_b,
-            liquidity_amount,
+            liquidity_amount: liquidity_amount.to_string(),
             tick_lower,
             tick_upper,
             possible_positions: account_keys,

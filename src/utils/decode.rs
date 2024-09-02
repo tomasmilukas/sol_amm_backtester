@@ -252,7 +252,6 @@ pub fn decode_hawksight_swap_data(encoded_data: &str) -> Result<HawksightSwapDat
     let data = bs58::decode(encoded_data).into_vec()?;
     let mut rdr = Cursor::new(data);
 
-    // Skip the 8-byte discriminant
     rdr.set_position(8);
 
     let amount = rdr.read_u64::<LittleEndian>()?;
@@ -298,16 +297,16 @@ mod tests {
 
     #[test]
     fn test_decode_decrease_liquidity_data() {
-        let encoded_data = "8xY8jsAzTgXsfQWoXb8hYrBSoh9ydGVUrSxXhDJLeNKEXPzNkqL23YT";
+        let encoded_data = "8xY8jsAzTgXmNQfVWfq3imPm4kuC37aXCNVn7WLS8VYmbQy75nFC5ju";
         let result = decode_decrease_liquidity_data(encoded_data);
 
         assert!(result.is_ok());
 
         let decoded = result.unwrap();
         let expected = DecreaseLiquidityData {
-            liquidity_amount: 2110879862446,
-            token_min_a: 68271297041,
-            token_min_b: 9797184859,
+            liquidity_amount: 9968981910,
+            token_min_a: 5375432361,
+            token_min_b: 317282184,
         };
 
         assert_eq!(decoded, expected);
@@ -320,18 +319,18 @@ mod tests {
 
     #[test]
     fn test_decode_swap_data() {
-        let encoded_data = "59p8WydnSZtTMEerNVUsiGdWjLsxsee3SJ6mAxE3ERpZJRJACDnUv6gs6F";
+        let encoded_data = "59p8WydnSZtRrqp7VaC17QabjBLLqjqe8qNioXKzF5gRisxqdGSDja16GQ";
         let result = decode_hawksight_swap_data(encoded_data);
 
         assert!(result.is_ok());
 
         let decoded = result.unwrap();
         let expected = HawksightSwapData {
-            amount: 118566,
-            other_amount_threshold: 875226,
-            sqrt_price_limit: 79226673515401279992447579055,
+            amount: 140034,
+            other_amount_threshold: 17689,
+            sqrt_price_limit: 4295048016,
             amount_specified_is_input: true,
-            a_to_b: false,
+            a_to_b: true,
         };
 
         assert_eq!(decoded, expected);

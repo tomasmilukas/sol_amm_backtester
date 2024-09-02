@@ -263,7 +263,8 @@ impl OrcaOptimizedAMM {
             .as_str()
             .unwrap()
             .parse::<u128>()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .to_string();
 
         TransactionModel {
             signature: signature.to_string(),
