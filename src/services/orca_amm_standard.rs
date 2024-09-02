@@ -4,6 +4,10 @@ use crate::models::transactions_model::{
 };
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_sync_amm_service::{constants, AMMService};
+use crate::utils::decode::{
+    decode_increase_liquidity_data, find_encoded_instruction_data, DECREASE_LIQUIDITY_DISCRIMINANT,
+    INCREASE_LIQUIDITY_DISCRIMINANT,
+};
 use crate::utils::hawksight_parsing_tx::{HawksightParser, PoolInfo};
 use crate::utils::transaction_utils::retry_with_backoff;
 
@@ -220,22 +224,32 @@ impl OrcaStandardAMM {
             ready_for_backtesting: false,
             data: match transaction_type.as_str() {
                 "IncreaseLiquidity" | "IncreaseLiquidityV2" => {
+                    let encoded_data =
+                        find_encoded_instruction_data(tx_data, INCREASE_LIQUIDITY_DISCRIMINANT)?;
+                    let decoded = decode_increase_liquidity_data(&encoded_data)?;
+
                     TransactionData::IncreaseLiquidity(LiquidityData {
                         token_a: self.token_a_address.clone(),
                         token_b: self.token_b_address.clone(),
                         amount_a,
                         amount_b,
+                        liquidity_amount: decoded.liquidity_amount.to_string(),
                         tick_lower: None,
                         tick_upper: None,
                         possible_positions: common_data.account_keys,
                     })
                 }
                 "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
+                    let encoded_data =
+                        find_encoded_instruction_data(tx_data, DECREASE_LIQUIDITY_DISCRIMINANT)?;
+                    let decoded = decode_increase_liquidity_data(&encoded_data)?;
+
                     TransactionData::DecreaseLiquidity(LiquidityData {
                         token_a: self.token_a_address.clone(),
                         token_b: self.token_b_address.clone(),
                         amount_a,
                         amount_b,
+                        liquidity_amount: decoded.liquidity_amount.to_string(),
                         tick_lower: None,
                         tick_upper: None,
                         possible_positions: common_data.account_keys,

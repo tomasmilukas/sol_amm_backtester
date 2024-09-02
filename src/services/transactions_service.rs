@@ -96,8 +96,8 @@ impl TransactionsService {
         for position_address in &updated_data.possible_positions {
             if let Some(position) = position_map.get(position_address) {
                 // Update tick_lower and tick_upper if the position is found
-                updated_data.tick_lower = Some(position.tick_lower as u64);
-                updated_data.tick_upper = Some(position.tick_upper as u64);
+                updated_data.tick_lower = Some(position.tick_lower as i32);
+                updated_data.tick_upper = Some(position.tick_upper as i32);
                 break; // Assuming we only need to update based on the first matching position
             }
         }
