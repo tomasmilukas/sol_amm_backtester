@@ -35,7 +35,6 @@ impl HawksightParser {
         pool_info: &PoolInfo,
         common_data: &CommonTransactionData,
     ) -> Result<Vec<TransactionModel>> {
-        println!("HAWKSIGHT TX: {}", common_data.signature);
         let mut transactions = Vec::new();
 
         let log_messages = transaction["meta"]["logMessages"]
@@ -151,8 +150,8 @@ impl HawksightParser {
         let mut amount_a = 0.0;
         let mut amount_b = 0.0;
 
-        let mut tick_lower: Option<u64> = Some(0);
-        let mut tick_upper: Option<u64> = Some(0);
+        let mut tick_lower: Option<i32> = Some(0);
+        let mut tick_upper: Option<i32> = Some(0);
         let mut liquidity_amount: u128 = 0;
 
         for message in log_messages {
@@ -170,17 +169,17 @@ impl HawksightParser {
             } else if message.starts_with("Program log: Tick lower index: ") {
                 let tick_lower_result = message
                     .trim_start_matches("Program log: Tick lower index: ")
-                    .parse()
+                    .parse::<i32>()
                     .unwrap_or(0);
 
                 tick_lower = Some(tick_lower_result)
             } else if message.starts_with("Program log: Tick upper index: ") {
                 let tick_upper_result = message
                     .trim_start_matches("Program log: Tick upper index: ")
-                    .parse()
+                    .parse::<i32>()
                     .unwrap_or(0);
 
-                tick_upper = Some(tick_upper_result)
+                tick_upper = Some(tick_upper_result);
             } else if message.starts_with("Program log: liquidity_amount: ") {
                 let liquidity_amount_parsed = message
                     .trim_start_matches("Program log: liquidity_amount: ")
@@ -206,5 +205,136 @@ impl HawksightParser {
             tick_upper,
             possible_positions: account_keys,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_hawksight_parser_with_real_data() {
+        // The full JSON string from the transaction
+        let transaction_json = json!({
+            "blockTime": 1725258498,
+            "meta": {
+                "innerInstructions": [
+                    {
+                        "index": 2,
+                        "instructions": [
+                            {
+                                "accounts": [22, 2, 16, 7, 17, 8, 18, 9, 10, 11, 21],
+                                "data": "59p8WydnSZtSgvdX6cMyZ95kjwDLE5vHpsDgpehCuLrZYbeCCYHrdHkhbu",
+                                "programIdIndex": 25,
+                                "stackHeight": 3
+                            },
+                            {
+                                "accounts": [16, 22, 2, 5, 6, 7, 8, 17, 18, 19, 20],
+                                "data": "3KLKPPgnNhbYeMn4Buq7dEb9wgXg5rTDeXSwNoPXxjSP2nDxhFqk81D",
+                                "programIdIndex": 25,
+                                "stackHeight": 3
+                            }
+                        ]
+                    }
+                ],
+                "logMessages": [
+                    "Program log: Instruction: Swap",
+                    "Program log: price_numerator 128695633296",
+                    "Program log: amount_to_swap 118566",
+                    "Program log: Token balance A: 2536570",
+                    "Program log: Token balance B: 89966",
+                    "Program log: Tick lower index: -21752",
+                    "Program log: Tick upper index: -15560",
+                    "Program log: liquidity_amount: 4153033",
+                    "Program log: Will deposit: 2536570 amount in A",
+                    "Program log: Will deposit: 89966 amount in B",
+                    "Program log: Instruction: IncreaseLiquidity"
+                ]
+            },
+            "transaction": {
+                "message": {
+                    "accountKeys": [
+                        "HAWK3BVnwptKRFYfVoVGhBc2TYxpyG9jmAbkHeW9tyKE",
+                        "dche7M2764e8AxNihBdn7uffVzZvTBNeL8x4LZg5E2c",
+                        "HN5jKXfzyg6KXaq6X8GxYyPH1WQtWHYx4zN2DwFvoPAi",
+                        "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q"
+                    ]
+                }
+            }
+        });
+
+        let pool_info = PoolInfo {
+            address: "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q".to_string(),
+            token_a: "So11111111111111111111111111111111111111112".to_string(),
+            token_b: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            decimals_a: 9,
+            decimals_b: 6,
+        };
+
+        let common_data = CommonTransactionData {
+            signature: "test_signature".to_string(),
+            block_time: 1725258498,
+            block_time_utc: chrono::DateTime::from_timestamp(1725258498, 0).unwrap(),
+            account_keys: transaction_json["transaction"]["message"]["accountKeys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|key| key.as_str().unwrap().to_string())
+                .collect(),
+        };
+
+        let result =
+            HawksightParser::parse_hawksight_program(&transaction_json, &pool_info, &common_data);
+        assert!(result.is_ok());
+
+        let parsed_transactions = result.unwrap();
+        assert_eq!(parsed_transactions.len(), 2); // We expect both a swap and a liquidity transaction
+
+        // Check Swap transaction
+        let swap_transaction = parsed_transactions
+            .iter()
+            .find(|t| t.transaction_type == "Swap")
+            .unwrap();
+        if let TransactionData::Swap(swap_data) = &swap_transaction.data {
+            assert_eq!(
+                swap_data.token_out,
+                "So11111111111111111111111111111111111111112"
+            );
+            assert_eq!(
+                swap_data.token_in,
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            );
+        } else {
+            panic!("Expected Swap data");
+        }
+
+        // Check IncreaseLiquidity transaction
+        let liquidity_transaction = parsed_transactions
+            .iter()
+            .find(|t| t.transaction_type == "IncreaseLiquidity")
+            .unwrap();
+
+        if let TransactionData::IncreaseLiquidity(liquidity_data) = &liquidity_transaction.data {
+            assert_eq!(
+                liquidity_data.token_a,
+                "So11111111111111111111111111111111111111112"
+            );
+            assert_eq!(
+                liquidity_data.token_b,
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            );
+            assert_eq!(liquidity_data.liquidity_amount, "4153033");
+            assert_eq!(liquidity_data.tick_lower, Some(-21752));
+            assert_eq!(liquidity_data.tick_upper, Some(-15560));
+            assert!(liquidity_data
+                .possible_positions
+                .contains(&"HAWK3BVnwptKRFYfVoVGhBc2TYxpyG9jmAbkHeW9tyKE".to_string()));
+            assert!(liquidity_data
+                .possible_positions
+                .contains(&"FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q".to_string()));
+        } else {
+            panic!("Expected IncreaseLiquidity data");
+        }
     }
 }

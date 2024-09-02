@@ -125,39 +125,6 @@ pub fn decode_position(data: &[u8]) -> Result<Position> {
     })
 }
 
-// pub fn decode_orca_swap_data(data: &[u8]) -> Result<HawksightOrcaSwapData> {
-//     if data.len() < 34 {
-//         // Minimum expected length
-//         return Err(anyhow!("Data too short"));
-//     }
-
-//     let mut rdr = Cursor::new(data);
-
-//     // Skip first 8 bytes (possibly a header)
-//     rdr.set_position(8);
-
-//     // Read amount (8 bytes)
-//     let amount = rdr.read_u64::<LittleEndian>()?;
-
-//     // Read other_amount_threshold (8 bytes)
-//     let other_amount_threshold = rdr.read_u64::<LittleEndian>()?;
-
-//     // Read sqrt_price_limit (8 bytes)
-//     let sqrt_price_limit = rdr.read_u64::<LittleEndian>()? as u128;
-
-//     // Read boolean values from the last two bytes
-//     let amount_specified_is_input = data[data.len() - 2] != 0;
-//     let a_to_b = data[data.len() - 1] != 0;
-
-//     Ok(HawksightOrcaSwapData {
-//         amount,
-//         other_amount_threshold,
-//         sqrt_price_limit,
-//         amount_specified_is_input,
-//         a_to_b,
-//     })
-// }
-
 fn compute_discriminator(name: &str) -> [u8; 8] {
     let mut hasher = Sha256::new();
     hasher.update("account:".as_bytes());
@@ -229,7 +196,7 @@ pub fn decode_decrease_liquidity_data(encoded_data: &str) -> Result<DecreaseLiqu
 }
 
 pub fn find_encoded_inner_instruction(tx_data: &Value, discriminant: &str) -> Result<String> {
-    let inner_instructions = tx_data["result"]["meta"]["innerInstructions"]
+    let inner_instructions = tx_data["meta"]["innerInstructions"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Inner instructions not found in transaction data"))?;
 
