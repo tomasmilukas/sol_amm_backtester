@@ -1,10 +1,13 @@
 use crate::{
     models::transactions_model::{LiquidityData, SwapData, TransactionData, TransactionModel},
     services::orca_amm_standard::CommonTransactionData,
-    utils::decode::decode_orca_swap_data,
 };
 use anyhow::{anyhow, Result};
 use serde_json::Value;
+
+use super::decode::{
+    decode_hawksight_swap_data, find_encoded_inner_instruction, HAWKSIGHT_SWAP_DISCRIMINANT,
+};
 
 pub struct HawksightParser;
 
@@ -14,15 +17,6 @@ pub struct PoolInfo {
     pub token_b: String,
     pub decimals_a: i16,
     pub decimals_b: i16,
-}
-
-#[derive(Debug)]
-pub struct HawksightOrcaSwapData {
-    pub amount: u64,
-    pub other_amount_threshold: u64,
-    pub sqrt_price_limit: u128,
-    pub amount_specified_is_input: bool,
-    pub a_to_b: bool,
 }
 
 // This hawksight parser ONLY parses auto compound which happens very often. There are other transactions it does but we only parse this one so far.
@@ -100,50 +94,9 @@ impl HawksightParser {
         log_messages: &Vec<Value>,
         pool_info: &PoolInfo,
     ) -> Result<SwapData> {
-        // Find the "Instruction: Swap" log
-        let swap_index = log_messages
-            .iter()
-            .position(|msg| msg.as_str() == Some("Program log: Instruction: Swap"))
-            .ok_or_else(|| anyhow!("Swap instruction not found"))?;
-
-        let invoke_log = log_messages[swap_index - 1].as_str().unwrap();
-
-        // Extract the invoke nmr near swap
-        let invoke_nmr_on_swap = invoke_log
-            .split('[')
-            .nth(1)
-            .and_then(|s| s.split(']').next())
-            .and_then(|s| s.parse::<usize>().ok())
-            .ok_or_else(|| anyhow!("Failed to parse invoke depth"))?;
-
-        // Count the number of invoke logs with the same depth up until swap index.
-        let invoke_count = log_messages[0..swap_index]
-            .iter()
-            .filter(|msg| {
-                msg.as_str().map_or(false, |s| {
-                    s.contains(&format!("invoke [{}]", invoke_nmr_on_swap))
-                })
-            })
-            .count();
-
-        // Find the corresponding inner instruction
-        let inner_instructions = transaction["meta"]["innerInstructions"][0]["instructions"]
-            .as_array()
-            .ok_or_else(|| anyhow!("Missing innerInstructions"))?;
-
-        let swap_filtered_inner_instruction: Vec<&Value> = inner_instructions
-            .iter()
-            .filter(|instr| instr["stackHeight"] == invoke_nmr_on_swap)
-            .collect();
-
-        let data = swap_filtered_inner_instruction[invoke_count - 1]["data"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Swap data not found"))?;
-
-        // the data is originally base58 so we convert to bytes.
-        let decoded_bytes = bs58::decode(data).into_vec().unwrap();
-
-        let swap_data = decode_orca_swap_data(&decoded_bytes as &[u8])?;
+        let encoded_data =
+            find_encoded_inner_instruction(transaction, HAWKSIGHT_SWAP_DISCRIMINANT)?;
+        let swap_data = decode_hawksight_swap_data(&encoded_data)?;
 
         // Extract price_numerator from logs
         let price_numerator = log_messages
@@ -199,6 +152,7 @@ impl HawksightParser {
 
         let mut tick_lower: Option<u64> = Some(0);
         let mut tick_upper: Option<u64> = Some(0);
+        let mut liquidity_amount: u128 = 0;
 
         for message in log_messages {
             let message = message.as_str().unwrap_or("");
@@ -226,6 +180,13 @@ impl HawksightParser {
                     .unwrap_or(0);
 
                 tick_upper = Some(tick_upper_result)
+            } else if message.starts_with("Program log: liquidity_amount: ") {
+                let liquidity_amount_parsed = message
+                    .trim_start_matches("Program log: liquidity_amount: ")
+                    .parse()
+                    .unwrap_or(0);
+
+                liquidity_amount = liquidity_amount_parsed
             }
         }
 
@@ -239,6 +200,7 @@ impl HawksightParser {
             token_b: pool_info.token_b.clone(),
             amount_a,
             amount_b,
+            liquidity_amount,
             tick_lower,
             tick_upper,
             possible_positions: account_keys,
