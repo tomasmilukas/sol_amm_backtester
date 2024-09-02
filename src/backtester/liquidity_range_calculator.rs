@@ -1,7 +1,8 @@
 use anyhow::Result;
 
 use crate::{
-    models::positions_model::PositionModel,
+    models::{pool_model::PoolModel, positions_model::PositionModel},
+    repositories::transactions_repo::{OrderDirection, TransactionRepo},
     utils::price_calcs::{get_current_tick, tick_to_sqrt_price},
 };
 
@@ -51,7 +52,7 @@ impl LiquidityArray {
         }
     }
 
-    fn update_liquidity_for_constructing_range(&mut self, tick_data: TickData) {
+    fn update_liquidity(&mut self, tick_data: TickData) {
         let lower_tick_index = self.get_index(tick_data.lower_tick, false);
         let upper_tick_index = self.get_index(tick_data.upper_tick, true);
 
@@ -65,10 +66,6 @@ impl LiquidityArray {
         for i in lower_tick_index..=upper_tick_index {
             self.data[i].liquidity += liquidity_per_tick_spacing;
         }
-    }
-
-    fn update_liquidity_from_tx(&mut self) {
-        todo!("")
     }
 
     fn get_liquidity_in_range(&self, start_tick: i32, end_tick: i32) -> i128 {
@@ -88,7 +85,7 @@ impl LiquidityArray {
         amount_in: f64,
         amount_out: f64,
         is_sell: bool,
-        fee_rate: f64,
+        fee_rate: i16,
     ) -> Result<(i32, i32, f64)> {
         let starting_price = if is_sell {
             amount_in / amount_out
@@ -145,7 +142,7 @@ impl LiquidityArray {
             self.data[index].liquidity = new_liquidity as u128;
         }
 
-        Ok((starting_tick, ending_tick, fee_rate * amount_in))
+        Ok((starting_tick, ending_tick, fee_rate as f64 * amount_in))
     }
 
     fn calculate_amounts(
@@ -201,6 +198,26 @@ impl LiquidityArray {
         let l_b = amount_b / (sqrt_price_current - sqrt_price_lower);
         l_a.min(l_b)
     }
+
+    fn update_liquidity_from_tx(&mut self, tick_data: TickData, is_increase: bool) {
+        let lower_tick_index = self.get_index(tick_data.lower_tick, false);
+        let upper_tick_index = self.get_index(tick_data.upper_tick, true);
+
+        let tick_count = upper_tick_index - lower_tick_index;
+
+        // In case a position is providing liquidity in a single tick space, the tick_count needs to be set to zero.
+        let final_tick_count = if tick_count == 0 { 1 } else { tick_count };
+        let liquidity_per_tick_spacing = tick_data.liquidity / (final_tick_count as u128);
+
+        // Distribute the liquidity evenly amongst the indices.
+        for i in lower_tick_index..=upper_tick_index {
+            if is_increase {
+                self.data[i].liquidity += liquidity_per_tick_spacing
+            } else {
+                self.data[i].liquidity -= liquidity_per_tick_spacing
+            }
+        }
+    }
 }
 
 pub fn create_full_liquidity_range(
@@ -223,7 +240,86 @@ pub fn create_full_liquidity_range(
             liquidity,
         };
 
-        liquidity_array.update_liquidity_for_constructing_range(tick_data);
+        liquidity_array.update_liquidity(tick_data);
+    }
+
+    Ok(liquidity_array)
+}
+
+pub async fn sync_backwards(
+    transaction_repo: &TransactionRepo,
+    mut liquidity_array: LiquidityArray,
+    pool_model: PoolModel,
+    batch_size: i64,
+) -> Result<LiquidityArray> {
+    let latest_transaction = transaction_repo
+        .fetch_highest_block_time_transaction(&pool_model.address)
+        .await?;
+
+    // Initialize the cursor with the latest tx_id
+    let mut cursor = latest_transaction.map(|tx| tx.tx_id);
+
+    loop {
+        let transactions = transaction_repo
+            .fetch_transactions(
+                &pool_model.address,
+                cursor,
+                batch_size,
+                OrderDirection::Descending,
+            )
+            .await?;
+
+        if transactions.is_empty() {
+            break;
+        }
+
+        for transaction in transactions.iter().rev() {
+            // Process in reverse order
+            match transaction.transaction_type.as_str() {
+                "IncreaseLiquidity" | "DecreaseLiquidity" => {
+                    let liquidity_data = transaction.data.to_liquidity_data()?;
+
+                    let tick_data = TickData {
+                        lower_tick: liquidity_data.tick_lower.unwrap(),
+                        upper_tick: liquidity_data.tick_upper.unwrap(),
+                        liquidity: liquidity_data.liquidity_amount.parse::<u128>().unwrap(),
+                    };
+
+                    let is_increase =
+                        if transaction.transaction_type.as_str() == "IncreaseLiquidity" {
+                            true
+                        } else {
+                            false
+                        };
+
+                    liquidity_array.update_liquidity_from_tx(tick_data, is_increase);
+                }
+                "Swap" => {
+                    let swap_data = transaction.data.to_swap_data()?;
+
+                    let is_sell = if swap_data.token_in == pool_model.token_a_address {
+                        true
+                    } else {
+                        false
+                    };
+
+                    liquidity_array.simulate_swap(
+                        swap_data.amount_in,
+                        swap_data.amount_out,
+                        is_sell,
+                        pool_model.fee_rate,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+
+        // Update cursor for next batch
+        cursor = transactions.last().map(|t| t.tx_id);
+
+        if transactions.len() < batch_size as usize {
+            break; // We've reached the end
+        }
     }
 
     Ok(liquidity_array)

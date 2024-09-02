@@ -111,6 +111,13 @@ impl TransactionData {
             TransactionData::DecreaseLiquidity(data)
         }
     }
+
+    pub fn to_swap_data(&self) -> Result<&SwapData> {
+        match self {
+            TransactionData::Swap(data) => Ok(data),
+            _ => Err(anyhow::anyhow!("Transaction is not a swap transaction")),
+        }
+    }
 }
 
 impl LiquidityData {
