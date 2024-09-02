@@ -88,30 +88,36 @@ impl LiquidityArray {
         fee_rate: i16,
     ) -> Result<(i32, i32, f64)> {
         let starting_price = if is_sell {
-            amount_in / amount_out
-        } else {
             amount_out / amount_in
+        } else {
+            amount_in / amount_out
         };
 
-        let amount_in_after_fee = amount_in * (1 - fee_rate as i64) as f64;
+        println!("STARTING PRICE: {}", starting_price);
 
         let mut current_tick = get_current_tick(starting_price.sqrt(), self.tick_spacing);
-        let mut remaining_amount = amount_in_after_fee;
+        let mut remaining_amount = amount_in * (1 - fee_rate as i64) as f64;
 
         let starting_tick = current_tick;
         let mut ending_tick = starting_tick;
 
+        println!("CURRENT TICK: {}", current_tick);
+
         while remaining_amount > 0.0 {
+            // if is_sell true then we must have the upper_tick range since we are selling and moving down.
             let index = self.get_index(current_tick, is_sell);
             let liquidity = self.data[index].liquidity as f64;
             let (lower_tick, upper_tick) =
                 (self.data[index].lower_tick, self.data[index].upper_tick);
+
             let (lower_sqrt_price, upper_sqrt_price) = (
                 tick_to_sqrt_price(lower_tick),
                 tick_to_sqrt_price(upper_tick),
             );
+
             let current_sqrt_price = tick_to_sqrt_price(current_tick);
 
+            // amount_a and amount_b reflects how much liquidity in tokens exists in that tick range.
             let (amount_a, amount_b) = self.calculate_amounts(
                 current_tick,
                 lower_tick,
@@ -122,27 +128,66 @@ impl LiquidityArray {
                 upper_sqrt_price,
             );
 
-            let (new_amount, new_tick) = if is_sell {
-                self.process_sell(amount_a, amount_in, lower_tick)
+            if is_sell {
+                let (amount_liquidity_left, new_tick, new_remaining_amount) =
+                    if amount_a > remaining_amount {
+                        // stay in the range
+                        (amount_a - remaining_amount, current_tick, 0.0)
+                    } else {
+                        // exit the range
+                        (
+                            0.0,
+                            current_tick - self.tick_spacing,
+                            remaining_amount - amount_a,
+                        )
+                    };
+
+                remaining_amount = new_remaining_amount;
+                current_tick = new_tick;
+                ending_tick = new_tick;
+
+                let new_liquidity = self.calculate_liquidity(
+                    amount_liquidity_left,
+                    amount_b,
+                    current_sqrt_price,
+                    lower_sqrt_price,
+                    upper_sqrt_price,
+                );
+                self.data[index].liquidity = new_liquidity as u128;
             } else {
-                self.process_buy(amount_b, amount_in, upper_tick)
-            };
+                let (amount_liquidity_left, new_tick, new_remaining_amount) =
+                    if amount_b > remaining_amount {
+                        // stay in the range
+                        (amount_b - remaining_amount, current_tick, 0.0)
+                    } else {
+                        // exit the range
+                        (
+                            0.0,
+                            current_tick + self.tick_spacing,
+                            remaining_amount - amount_a,
+                        )
+                    };
 
-            remaining_amount -= amount_in - new_amount;
-            current_tick = new_tick;
-            ending_tick = new_tick;
+                remaining_amount = new_remaining_amount;
+                current_tick = new_tick;
+                ending_tick = new_tick;
 
-            let new_liquidity = self.calculate_liquidity(
-                new_amount,
-                if is_sell { amount_b } else { amount_a },
-                current_sqrt_price,
-                lower_sqrt_price,
-                upper_sqrt_price,
-            );
-            self.data[index].liquidity = new_liquidity as u128;
+                let new_liquidity = self.calculate_liquidity(
+                    amount_a,
+                    amount_liquidity_left,
+                    current_sqrt_price,
+                    lower_sqrt_price,
+                    upper_sqrt_price,
+                );
+                self.data[index].liquidity = new_liquidity as u128;
+            }
         }
 
-        Ok((starting_tick, ending_tick, fee_rate as f64 * amount_in))
+        Ok((
+            starting_tick,
+            ending_tick,
+            (fee_rate / 10000) as f64 * amount_in,
+        ))
     }
 
     fn calculate_amounts(
@@ -167,22 +212,6 @@ impl LiquidityArray {
             )
         } else {
             (0.0, liquidity * (upper_sqrt_price - lower_sqrt_price))
-        }
-    }
-
-    fn process_sell(&self, amount_a: f64, amount_in: f64, lower_tick: i32) -> (f64, i32) {
-        if amount_a > amount_in {
-            (amount_a - amount_in, lower_tick)
-        } else {
-            (0.0, lower_tick)
-        }
-    }
-
-    fn process_buy(&self, amount_b: f64, amount_in: f64, upper_tick: i32) -> (f64, i32) {
-        if amount_b > amount_in {
-            (amount_b - amount_in, upper_tick)
-        } else {
-            (0.0, upper_tick)
         }
     }
 
@@ -274,7 +303,6 @@ pub async fn sync_backwards(
         }
 
         for transaction in transactions.iter().rev() {
-            // Process in reverse order
             match transaction.transaction_type.as_str() {
                 "IncreaseLiquidity" | "DecreaseLiquidity" => {
                     let liquidity_data = transaction.data.to_liquidity_data()?;
@@ -303,22 +331,24 @@ pub async fn sync_backwards(
                         false
                     };
 
+                    // fee rates are in bps
+                    let fee_rate_pct = pool_model.fee_rate / 10000;
+
                     liquidity_array.simulate_swap(
                         swap_data.amount_in,
                         swap_data.amount_out,
                         is_sell,
-                        pool_model.fee_rate,
+                        fee_rate_pct,
                     )?;
                 }
                 _ => {}
             }
         }
 
-        // Update cursor for next batch
         cursor = transactions.last().map(|t| t.tx_id);
 
         if transactions.len() < batch_size as usize {
-            break; // We've reached the end
+            break;
         }
     }
 
