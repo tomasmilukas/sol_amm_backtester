@@ -259,6 +259,12 @@ impl OrcaOptimizedAMM {
         );
 
         let position = payload["keyPosition"].to_string();
+        let liquidity_amount = payload["dataLiquidityAmount"]
+            .as_str()
+            .unwrap()
+            .parse::<u128>()
+            .unwrap_or(0)
+            .to_string();
 
         TransactionModel {
             signature: signature.to_string(),
@@ -273,6 +279,7 @@ impl OrcaOptimizedAMM {
                     token_b: self.token_b_address.clone(),
                     amount_a,
                     amount_b,
+                    liquidity_amount,
                     tick_lower: None,
                     tick_upper: None,
                     possible_positions: vec![position],
@@ -283,6 +290,7 @@ impl OrcaOptimizedAMM {
                     token_b: self.token_b_address.clone(),
                     amount_a,
                     amount_b,
+                    liquidity_amount,
                     tick_lower: None,
                     tick_upper: None,
                     possible_positions: vec![position],
