@@ -50,8 +50,9 @@ pub struct LiquidityData {
     pub token_b: String,
     pub amount_a: f64,
     pub amount_b: f64,
-    pub tick_lower: Option<u64>,
-    pub tick_upper: Option<u64>,
+    pub liquidity_amount: String,
+    pub tick_lower: Option<i32>,
+    pub tick_upper: Option<i32>,
     pub possible_positions: Vec<String>,
 }
 
