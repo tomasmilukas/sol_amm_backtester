@@ -5,7 +5,7 @@ use crate::{
     repositories::transactions_repo::TransactionRepo,
 };
 
-use super::liquidity_range_calculator::TickData;
+use super::liquidity_array::TickData;
 
 struct PoolInfo {
     fee_rate: i32,
