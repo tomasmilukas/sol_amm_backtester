@@ -17,13 +17,12 @@ use crate::{
     },
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use api::{positions_api::PositionsApi, transactions_api::TransactionApi};
-use backtester::liquidity_range_calculator::{create_full_liquidity_range, sync_backwards};
+use backtester::utils::{create_full_liquidity_range, sync_backwards};
 use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
-use models::positions_model::Position;
 use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use services::{
     positions_service::PositionsService, transactions_service::TransactionsService,
@@ -187,11 +186,12 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
     let tx_repo = TransactionRepo::new(pool);
 
     // Create the liquidity range "at present" from db.
-    let liquidity_range_arr = create_full_liquidity_range(pool_data.tick_spacing, positions_data)?;
+    let liquidity_range_arr =
+        create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
 
     // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
     let original_starting_liquidity_arr =
-        sync_backwards(&tx_repo, liquidity_range_arr, pool_data, 5).await?;
+        sync_backwards(&tx_repo, liquidity_range_arr, pool_data, 10_000).await?;
 
     Ok(())
 }

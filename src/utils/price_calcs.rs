@@ -1,4 +1,5 @@
 pub const Q32: u128 = 1u128 << 32;
+pub const Q64: u128 = 1u128 << 64;
 
 pub fn tick_to_sqrt_price(tick: i32) -> f64 {
     1.0001f64.powi(tick / 2)
