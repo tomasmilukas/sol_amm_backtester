@@ -172,6 +172,27 @@ impl TransactionRepo {
             .transpose()
     }
 
+    pub async fn fetch_highest_tx_swap(
+        &self,
+        pool_address: &str,
+    ) -> Result<Option<TransactionModelFromDB>> {
+        let result = sqlx::query(
+            r#"
+            SELECT * FROM transactions 
+            WHERE pool_address = $1 AND transaction_type = 'Swap'
+            ORDER BY tx_id DESC 
+            LIMIT 1
+            "#,
+        )
+        .bind(pool_address)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        result
+            .map(|row| self.row_to_transaction_model(&row))
+            .transpose()
+    }
+
     pub async fn fetch_transactions(
         &self,
         pool_address: &str,
