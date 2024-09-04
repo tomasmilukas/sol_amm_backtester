@@ -6,7 +6,7 @@ use crate::{
     try_calc,
     utils::{
         error::{PriceCalcError, SyncError},
-        price_calcs::{f64_to_fixed_point, fixed_point_to_f64, tick_to_sqrt_price},
+        price_calcs::{sqrt_price_to_fixed, tick_to_sqrt_price, Q32},
     },
 };
 
@@ -23,7 +23,7 @@ pub struct LiquidityArray {
     min_tick: i32,
     tick_spacing: i32,
     current_tick: i32,
-    current_sqrt_price: f64,
+    current_sqrt_price: u128,
 }
 
 // The liquidity array is a static array that usually has 500k indices.
@@ -48,7 +48,7 @@ impl LiquidityArray {
             min_tick,
             tick_spacing,
             current_tick: 0,
-            current_sqrt_price: 0.0,
+            current_sqrt_price: 0,
         }
     }
 
@@ -90,20 +90,14 @@ impl LiquidityArray {
     // is_sell represents the directional movement of token_a. In SOL/USDC case is_sell represents selling SOL for USDC.
     pub fn simulate_swap(
         &mut self,
-        amount_in: f64,
-        amount_out: f64,
+        amount_in: u128,
         is_sell: bool,
         fee_rate: i16,
-    ) -> Result<(i32, i32, f64), PriceCalcError> {
-        const Q64: u128 = 1u128 << 64;
-
+    ) -> Result<(i32, i32), PriceCalcError> {
         let mut current_tick = self.current_tick;
-        let mut current_sqrt_price_fixed = f64_to_fixed_point(self.current_sqrt_price);
+        let mut mut_current_sqrt_price = self.current_sqrt_price;
 
-        let mut remaining_amount =
-            f64_to_fixed_point(amount_in * (1.0 - fee_rate as f64 / 10000.0));
-        let original_amount_out = f64_to_fixed_point(amount_out);
-        let mut amount_out: u128 = 0;
+        let mut remaining_amount = amount_in * (1 - fee_rate / 10000) as u128;
 
         let starting_tick = current_tick;
         let mut ending_tick = starting_tick;
@@ -111,22 +105,19 @@ impl LiquidityArray {
         // High level explanation: sqrt prices are differently calculate if we are within a tick range or at the corners of ticks.
         // Since Liquidity is constant at a tick range, we need a variable that can efficiently track the ratio of token_a and token_b in the range.
         // Thats the sqrt price and it can be very granular. We cant use ticks since they offer 0 granurality. If tick_spacing is 2, the pool would only have 3 ratios (100/0, 50/50, 0/100).
-        while remaining_amount > 0 || amount_out >= original_amount_out {
+        while remaining_amount > 0 {
             let index = self.get_index(current_tick, is_sell);
             let liquidity = self.data[index].liquidity;
             let (lower_tick, upper_tick) =
                 (self.data[index].lower_tick, self.data[index].upper_tick);
 
-            let lower_sqrt_price_fixed = f64_to_fixed_point(tick_to_sqrt_price(lower_tick));
-            let upper_sqrt_price_fixed = f64_to_fixed_point(tick_to_sqrt_price(upper_tick));
+            let lower_sqrt_price_fixed = sqrt_price_to_fixed(tick_to_sqrt_price(lower_tick));
+            let upper_sqrt_price_fixed = sqrt_price_to_fixed(tick_to_sqrt_price(upper_tick));
 
             // we get amounts in the tick_range by using the sqrt_price
             let (amount_a_in_tick_range, amount_b_in_tick_range) = self.calculate_amounts(
-                current_tick,
-                lower_tick,
-                upper_tick,
                 liquidity,
-                current_sqrt_price_fixed,
+                mut_current_sqrt_price,
                 lower_sqrt_price_fixed,
                 upper_sqrt_price_fixed,
             );
@@ -136,52 +127,38 @@ impl LiquidityArray {
             // If we leave range, we must update tick and sqrtPrice and keep the loop going.
             if is_sell {
                 if amount_a_in_tick_range > remaining_amount {
-                    // Stay in the same tick range
-                    let amount_a_used = remaining_amount;
-                    let amount_b_out =
-                        amount_b_in_tick_range * amount_a_used / amount_a_in_tick_range;
-
                     // Update sqrt price
-                    current_sqrt_price_fixed = self.calculate_new_sqrt_price(
-                        current_sqrt_price_fixed,
+                    mut_current_sqrt_price = self.calculate_new_sqrt_price(
+                        mut_current_sqrt_price,
                         liquidity,
-                        amount_a_used,
+                        remaining_amount,
                         is_sell,
                     )?;
 
                     remaining_amount = 0;
-                    amount_out += amount_b_out;
                 } else {
                     // Cross to the next tick range
                     remaining_amount -= amount_a_in_tick_range;
-                    amount_out += amount_b_in_tick_range;
-                    current_tick = lower_tick - self.tick_spacing;
-                    current_sqrt_price_fixed = f64_to_fixed_point(tick_to_sqrt_price(current_tick));
+                    current_tick -= self.tick_spacing;
+                    mut_current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(current_tick));
                 }
             } else {
                 #[warn(clippy::collapsible_else_if)]
                 if amount_b_in_tick_range > remaining_amount {
-                    // Stay in the same tick range
-                    let amount_b_used = remaining_amount;
-                    let amount_a_out =
-                        amount_a_in_tick_range * amount_b_used / amount_b_in_tick_range;
-
                     // Update sqrt price
-                    current_sqrt_price_fixed = self.calculate_new_sqrt_price(
-                        current_sqrt_price_fixed,
+                    mut_current_sqrt_price = self.calculate_new_sqrt_price(
+                        mut_current_sqrt_price,
                         liquidity,
-                        amount_b_used,
+                        remaining_amount,
                         is_sell,
                     )?;
 
                     remaining_amount = 0;
-                    amount_out += amount_a_out;
                 } else {
                     // Cross to the next tick range
                     remaining_amount -= amount_b_in_tick_range;
-                    amount_out += amount_a_in_tick_range;
-                    current_tick = upper_tick + self.tick_spacing;
-                    current_sqrt_price_fixed = f64_to_fixed_point(tick_to_sqrt_price(current_tick));
+                    current_tick += self.tick_spacing;
+                    mut_current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(current_tick));
                 }
             }
 
@@ -189,45 +166,48 @@ impl LiquidityArray {
         }
 
         self.current_tick = ending_tick;
-        self.current_sqrt_price = fixed_point_to_f64(current_sqrt_price_fixed);
+        self.current_sqrt_price = mut_current_sqrt_price;
 
-        Ok((starting_tick, ending_tick, fixed_point_to_f64(amount_out)))
+        Ok((starting_tick, ending_tick))
     }
 
     #[allow(clippy::too_many_arguments)]
     fn calculate_amounts(
         &self,
-        current_tick: i32,
-        lower_tick: i32,
-        upper_tick: i32,
         liquidity: u128,
         current_sqrt_price_fixed: u128,
         lower_sqrt_price_fixed: u128,
         upper_sqrt_price_fixed: u128,
     ) -> (u128, u128) {
-        const Q64: u128 = 1u128 << 64;
+        // We calculate amounts based on the position of current_sqrt_price relative to the range
 
-        // The check is necessary since diff formulas are used. If we are within range we use current price to calculate amounts. If outside we use full Pb-Pa range.
-        if current_tick > lower_tick && current_tick < upper_tick {
-            // The standard deltaX = L/Pc - L/Pb
-            let amount_a = (liquidity * Q64 / current_sqrt_price_fixed)
-                .checked_sub(liquidity * Q64 / upper_sqrt_price_fixed)
-                .unwrap();
+        if current_sqrt_price_fixed <= lower_sqrt_price_fixed {
+            // Price is at or below the lower bound
+            // All liquidity is in token B
+            let amount_b = (liquidity * (upper_sqrt_price_fixed - lower_sqrt_price_fixed)) / Q32;
 
-            // The standard deltaY = Pc - Pa
-            let amount_b = (liquidity * (current_sqrt_price_fixed - lower_sqrt_price_fixed)) / Q64;
-
-            (amount_a, amount_b)
-        } else if current_tick == lower_tick {
-            let amount_a = (liquidity * Q64 / lower_sqrt_price_fixed)
-                .checked_sub(liquidity * Q64 / upper_sqrt_price_fixed)
+            (0, amount_b)
+        } else if current_sqrt_price_fixed >= upper_sqrt_price_fixed {
+            // Price is at or above the upper bound
+            // All liquidity is in token A
+            let amount_a = (liquidity * Q32 / lower_sqrt_price_fixed)
+                .checked_sub(liquidity * Q32 / upper_sqrt_price_fixed)
                 .unwrap();
 
             (amount_a, 0)
         } else {
-            let amount_b = (liquidity * (upper_sqrt_price_fixed - lower_sqrt_price_fixed)) / Q64;
+            // Price is within the range
+            // Liquidity is split between token A and B
+            // FYI formulas re-arranged from official docs. I think they got it wrong. Used p_u-p_c for a amount which reflects b amount. idk... my math looks solid when testing it.
 
-            (0, amount_b)
+            let amount_a = (liquidity * Q32 / lower_sqrt_price_fixed)
+                .checked_sub(liquidity * Q32 / current_sqrt_price_fixed)
+                .unwrap();
+
+            // Amount of token B: L * (sqrt(P_u) - sqrt(P_c))
+            let amount_b = (liquidity * (upper_sqrt_price_fixed - current_sqrt_price_fixed)) / Q32;
+
+            (amount_a, amount_b)
         }
     }
 
@@ -241,11 +221,8 @@ impl LiquidityArray {
         amount_in: u128,
         is_sell: bool,
     ) -> Result<u128, PriceCalcError> {
-        const Q64: u128 = 1u128 << 64;
-
         // Formula explanations for later in case need to edit:
         // x = L / sqrt(P) also y = L * sqrt(P)
-
         if is_sell {
             /*
             for this case:
@@ -262,7 +239,7 @@ impl LiquidityArray {
             */
             let numerator = try_calc!(current_sqrt_price.checked_mul(liquidity))?;
             let product = try_calc!(amount_in.checked_mul(current_sqrt_price))?;
-            let denominator = try_calc!(liquidity.checked_add(product / Q64))?;
+            let denominator = try_calc!(liquidity.checked_add(product / Q32))?;
             try_calc!(numerator.checked_div(denominator))
         } else {
             /*
@@ -278,7 +255,7 @@ impl LiquidityArray {
 
             sqrt(P_new) = sqrt(P) + (Δy / L)
             */
-            let product = try_calc!(amount_in.checked_mul(Q64))?;
+            let product = try_calc!(amount_in.checked_mul(Q32))?;
             let increment = try_calc!(product.checked_div(liquidity))?;
             try_calc!(current_sqrt_price.checked_add(increment))
         }
@@ -338,12 +315,29 @@ pub async fn sync_backwards(
     batch_size: i64,
 ) -> Result<LiquidityArray, SyncError> {
     let latest_transaction = transaction_repo
-        .fetch_highest_block_time_transaction(&pool_model.address)
+        .fetch_highest_tx_swap(&pool_model.address)
         .await
         .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
     // Initialize the cursor with the latest tx_id
-    let mut cursor = latest_transaction.map(|tx| tx.tx_id);
+    let mut cursor = latest_transaction.clone().map(|tx| tx.tx_id);
+
+    let swap_data = latest_transaction
+        .unwrap()
+        .data
+        .to_swap_data()
+        .map_err(|e| SyncError::DatabaseError(e.to_string()))?
+        .clone();
+
+    let is_sell = swap_data.token_in == pool_model.token_a_address;
+
+    // DOUBLE CHECK IF RIGHT.
+    // PLS
+    liquidity_array.current_sqrt_price = if is_sell {
+        sqrt_price_to_fixed((swap_data.amount_out / swap_data.amount_in).sqrt())
+    } else {
+        sqrt_price_to_fixed((swap_data.amount_in / swap_data.amount_out).sqrt())
+    };
 
     // Implement logic to fetch the most accurate price at that timestamp.
     // Then caculate the equiv current tick and sqrtPrice and add it to self.
@@ -377,12 +371,7 @@ pub async fn sync_backwards(
                         liquidity: liquidity_data.liquidity_amount.parse::<u128>().unwrap(),
                     };
 
-                    let is_increase =
-                        if transaction.transaction_type.as_str() == "IncreaseLiquidity" {
-                            true
-                        } else {
-                            false
-                        };
+                    let is_increase = transaction.transaction_type.as_str() == "IncreaseLiquidity";
 
                     liquidity_array.update_liquidity_from_tx(tick_data, is_increase);
                 }
@@ -392,18 +381,19 @@ pub async fn sync_backwards(
                         .to_swap_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                    let is_sell = if swap_data.token_in == pool_model.token_a_address {
-                        true
-                    } else {
-                        false
-                    };
+                    let is_sell = swap_data.token_in == pool_model.token_a_address;
 
                     // fee rates are in bps
                     let fee_rate_pct = pool_model.fee_rate / 10000;
 
+                    let scaling_factor = if is_sell {
+                        10f64.powi(pool_model.token_a_decimals as i32)
+                    } else {
+                        10f64.powi(pool_model.token_b_decimals as i32)
+                    };
+
                     liquidity_array.simulate_swap(
-                        swap_data.amount_in,
-                        swap_data.amount_out,
+                        (swap_data.amount_in * scaling_factor) as u128,
                         is_sell,
                         fee_rate_pct,
                     )?;
@@ -420,4 +410,164 @@ pub async fn sync_backwards(
     }
 
     Ok(liquidity_array)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_liquidity_array() -> LiquidityArray {
+        let mut array = LiquidityArray::new(-20, 20, 2);
+        array.current_tick = 4;
+        array.current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(array.current_tick));
+        array.update_liquidity(TickData {
+            lower_tick: -10,
+            upper_tick: 10,
+            liquidity: 1_000_000_000_000,
+        });
+        array
+    }
+
+    #[test]
+    fn test_simulate_swap_sell_direction() {
+        let mut array = setup_liquidity_array();
+        let starting_price = array.current_sqrt_price;
+
+        let result = array
+            .simulate_swap(6 * 10_i32.pow(6) as u128, true, 30)
+            .unwrap();
+
+        assert!(
+            result.0 == 4 && result.1 == 4,
+            "Swap should not have moved range at all. Starting tick and ending tick here."
+        );
+        assert!(
+            array.current_sqrt_price < starting_price,
+            "Price should decrease for a sell"
+        );
+
+        let result = array
+            .simulate_swap(6 * 10_i32.pow(6) as u128, true, 30)
+            .unwrap();
+
+        assert!(
+            result.0 == 4 && result.1 == 2,
+            "Swap should have moved range to 0-2. By 1 tick spacing."
+        );
+        assert!(
+            array.current_sqrt_price < sqrt_price_to_fixed(tick_to_sqrt_price(array.current_tick)),
+            "Price should decrease slightly below tick 2."
+        );
+    }
+
+    #[test]
+    fn test_simulate_swap_buy_direction() {
+        let mut array = setup_liquidity_array();
+        let starting_price = array.current_sqrt_price;
+
+        let result = array
+            .simulate_swap(6 * 10_i32.pow(6) as u128, false, 30)
+            .unwrap();
+
+        assert!(
+            result.0 == 4 && result.1 == 4,
+            "Swap should not have moved range at all. Starting tick and ending tick here."
+        );
+        assert!(
+            array.current_sqrt_price > starting_price,
+            "Price should increase for a sell"
+        );
+
+        // SWAP AGAIN. TICKS AND STUFF NEEDS TO MOVE.
+        let result = array
+            .simulate_swap(6 * 10_i32.pow(6) as u128, false, 30)
+            .unwrap();
+
+        assert!(
+            result.0 == 4 && result.1 == 6,
+            "Swap should have moved range to 4-6. By 1 tick spacing."
+        );
+        assert!(
+            array.current_sqrt_price > sqrt_price_to_fixed(tick_to_sqrt_price(array.current_tick)),
+            "Price should decrease slightly above tick 4."
+        );
+    }
+
+    #[test]
+    fn test_calculate_new_sqrt_price() {
+        let array = setup_liquidity_array();
+        let liquidity = 1_000_000_000_000;
+        let current_sqrt_price = sqrt_price_to_fixed(1.0);
+        let amount_in = sqrt_price_to_fixed(10.0);
+
+        // Test sell
+        let new_sqrt_price_sell = array
+            .calculate_new_sqrt_price(current_sqrt_price, liquidity, amount_in, true)
+            .unwrap();
+
+        assert!(
+            new_sqrt_price_sell < current_sqrt_price,
+            "Sell should decrease price"
+        );
+
+        // Test buy
+        let new_sqrt_price_buy = array
+            .calculate_new_sqrt_price(current_sqrt_price, liquidity, amount_in, false)
+            .unwrap();
+        assert!(
+            new_sqrt_price_buy > current_sqrt_price,
+            "Buy should increase price"
+        );
+    }
+
+    #[test]
+    fn test_calculate_amounts() {
+        let array = setup_liquidity_array();
+        let liquidity = 1_000_000_000_000;
+        let current_sqrt_price = sqrt_price_to_fixed(1.0);
+        let lower_sqrt_price = sqrt_price_to_fixed(0.99);
+        let upper_sqrt_price = sqrt_price_to_fixed(1.01);
+
+        // Equal 50/50 case.
+        let (amount_a, amount_b) = array.calculate_amounts(
+            liquidity,
+            current_sqrt_price,
+            lower_sqrt_price,
+            upper_sqrt_price,
+        );
+
+        assert!(
+            amount_a > 99 / 10 * 10_i32.pow(9) as u128
+                && amount_a <= 110 / 10 * 10_i32.pow(9) as u128
+                && amount_b > 99 / 10 * 10_i32.pow(9) as u128
+                && amount_b <= 100 * 10_i32.pow(9) as u128,
+            "Both amounts close to 50/50"
+        );
+
+        // 100/0 case.
+        let (amount_a, amount_b) = array.calculate_amounts(
+            liquidity,
+            lower_sqrt_price,
+            lower_sqrt_price,
+            upper_sqrt_price,
+        );
+
+        assert!(
+            amount_b >= 19 * 10_i32.pow(9) as u128 && amount_a == 0,
+            "amountb is full and a is 0"
+        );
+
+        // 0/100 case.
+        let (amount_a, amount_b) = array.calculate_amounts(
+            liquidity,
+            upper_sqrt_price,
+            lower_sqrt_price,
+            upper_sqrt_price,
+        );
+
+        assert!(
+            amount_a >= 19 * 10_i32.pow(9) as u128 && amount_b == 0,
+            "amount a is full and b is 0"
+        );
+    }
 }

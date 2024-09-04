@@ -15,7 +15,7 @@ pub struct TransactionModel {
 }
 
 // Transaction model from DB.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransactionModelFromDB {
     pub tx_id: i64,
     pub signature: String,
