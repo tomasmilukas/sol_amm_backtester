@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use sqlx::postgres::PgPool;
 use sqlx::Row;
 
@@ -11,6 +12,92 @@ pub struct TransactionRepo {
 pub enum OrderDirection {
     Ascending,
     Descending,
+}
+
+#[async_trait]
+pub trait TransactionRepoTrait {
+    async fn fetch_highest_tx_swap(
+        &self,
+        pool_address: &str,
+    ) -> Result<Option<TransactionModelFromDB>>;
+
+    async fn fetch_transactions(
+        &self,
+        pool_address: &str,
+        cursor: Option<i64>,
+        limit: i64,
+        order: OrderDirection,
+    ) -> Result<Vec<TransactionModelFromDB>>;
+}
+
+#[async_trait]
+impl TransactionRepoTrait for TransactionRepo {
+    async fn fetch_highest_tx_swap(
+        &self,
+        pool_address: &str,
+    ) -> Result<Option<TransactionModelFromDB>> {
+        let result = sqlx::query(
+            r#"
+            SELECT * FROM transactions 
+            WHERE pool_address = $1 AND transaction_type = 'Swap'
+            ORDER BY tx_id DESC 
+            LIMIT 1
+            "#,
+        )
+        .bind(pool_address)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        result
+            .map(|row| self.row_to_transaction_model(&row))
+            .transpose()
+    }
+
+    async fn fetch_transactions(
+        &self,
+        pool_address: &str,
+        cursor: Option<i64>,
+        limit: i64,
+        order: OrderDirection,
+    ) -> Result<Vec<TransactionModelFromDB>> {
+        let order_by = match order {
+            OrderDirection::Descending => "DESC",
+            OrderDirection::Ascending => "ASC",
+        };
+
+        let cursor_condition = match (order, cursor) {
+            (OrderDirection::Descending, Some(c)) => "tx_id < $3",
+            (OrderDirection::Ascending, Some(c)) => "tx_id > $3",
+            (_, None) => "1=1", // No cursor, fetch from the beginning/end
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                tx_id, signature, pool_address, block_time, block_time_utc,
+                transaction_type, ready_for_backtesting, data
+            FROM transactions
+            WHERE 
+                pool_address = $1
+                AND ({})
+            ORDER BY tx_id {}
+            LIMIT $2
+            "#,
+            cursor_condition, order_by
+        );
+
+        let mut q = sqlx::query(&query).bind(pool_address).bind(limit);
+
+        if let Some(c) = cursor {
+            q = q.bind(c);
+        }
+
+        let rows = q.fetch_all(&self.pool).await?;
+
+        rows.into_iter()
+            .map(|row| self.row_to_transaction_model(&row))
+            .collect()
+    }
 }
 
 impl TransactionRepo {
@@ -170,73 +257,6 @@ impl TransactionRepo {
         result
             .map(|row| self.row_to_transaction_model(&row))
             .transpose()
-    }
-
-    pub async fn fetch_highest_tx_swap(
-        &self,
-        pool_address: &str,
-    ) -> Result<Option<TransactionModelFromDB>> {
-        let result = sqlx::query(
-            r#"
-            SELECT * FROM transactions 
-            WHERE pool_address = $1 AND transaction_type = 'Swap'
-            ORDER BY tx_id DESC 
-            LIMIT 1
-            "#,
-        )
-        .bind(pool_address)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        result
-            .map(|row| self.row_to_transaction_model(&row))
-            .transpose()
-    }
-
-    pub async fn fetch_transactions(
-        &self,
-        pool_address: &str,
-        cursor: Option<i64>,
-        limit: i64,
-        order: OrderDirection,
-    ) -> Result<Vec<TransactionModelFromDB>> {
-        let order_by = match order {
-            OrderDirection::Descending => "DESC",
-            OrderDirection::Ascending => "ASC",
-        };
-
-        let cursor_condition = match (order, cursor) {
-            (OrderDirection::Descending, Some(c)) => "tx_id < $3",
-            (OrderDirection::Ascending, Some(c)) => "tx_id > $3",
-            (_, None) => "1=1", // No cursor, fetch from the beginning/end
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                tx_id, signature, pool_address, block_time, block_time_utc,
-                transaction_type, ready_for_backtesting, data
-            FROM transactions
-            WHERE 
-                pool_address = $1
-                AND ({})
-            ORDER BY tx_id {}
-            LIMIT $2
-            "#,
-            cursor_condition, order_by
-        );
-
-        let mut q = sqlx::query(&query).bind(pool_address).bind(limit);
-
-        if let Some(c) = cursor {
-            q = q.bind(c);
-        }
-
-        let rows = q.fetch_all(&self.pool).await?;
-
-        rows.into_iter()
-            .map(|row| self.row_to_transaction_model(&row))
-            .collect()
     }
 
     fn row_to_transaction_model(

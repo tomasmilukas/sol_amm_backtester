@@ -19,7 +19,7 @@ use crate::{
 
 use anyhow::{Context, Result};
 use api::{positions_api::PositionsApi, transactions_api::TransactionApi};
-use backtester::utils::{create_full_liquidity_range, sync_backwards};
+use backtester::backtest_utils::{create_full_liquidity_range, sync_backwards};
 use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
