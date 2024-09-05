@@ -17,7 +17,7 @@ pub struct TickData {
     pub liquidity: u128,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LiquidityArray {
     pub data: Vec<TickData>,
     pub positions: HashMap<String, OwnersPosition>,
@@ -66,7 +66,7 @@ impl LiquidityArray {
         }
     }
 
-    fn get_index(&self, tick: i32, is_upper_tick: bool) -> usize {
+    pub fn get_index(&self, tick: i32, is_upper_tick: bool) -> usize {
         let index = ((tick - self.min_tick) / self.tick_spacing) as usize;
         if is_upper_tick {
             index.saturating_sub(1).min(self.data.len() - 1)
