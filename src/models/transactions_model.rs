@@ -15,7 +15,7 @@ pub struct TransactionModel {
 }
 
 // Transaction model from DB.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransactionModelFromDB {
     pub tx_id: i64,
     pub signature: String,
@@ -109,6 +109,13 @@ impl TransactionData {
             TransactionData::IncreaseLiquidity(data)
         } else {
             TransactionData::DecreaseLiquidity(data)
+        }
+    }
+
+    pub fn to_swap_data(&self) -> Result<&SwapData> {
+        match self {
+            TransactionData::Swap(data) => Ok(data),
+            _ => Err(anyhow::anyhow!("Transaction is not a swap transaction")),
         }
     }
 }

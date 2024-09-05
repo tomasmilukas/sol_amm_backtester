@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::env;
 
+#[derive(Clone)]
 pub enum SyncMode {
     Update,
     Historical,
@@ -34,8 +35,9 @@ impl AppConfig {
                 .unwrap_or_else(|_| "30".to_string())
                 .parse()
                 .context("Failed to parse SYNC_DAYS")?,
-            sync_mode: SyncMode::from_str(&env::var("SYNC_MODE")
-                .unwrap_or_else(|_| "update".to_string()))?
+            sync_mode: SyncMode::from_str(
+                &env::var("SYNC_MODE").unwrap_or_else(|_| "update".to_string()),
+            )?,
         })
     }
 }
