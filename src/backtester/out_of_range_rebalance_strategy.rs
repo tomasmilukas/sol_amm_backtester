@@ -44,6 +44,7 @@ impl Strategy for SimpleRebalanceStrategy {
                 {
                     let actions = vec![Action::Rebalance {
                         position_id: String::from("simple_rebalance"),
+                        rebalance_ratio: 0.5,
                     }];
 
                     return actions;
