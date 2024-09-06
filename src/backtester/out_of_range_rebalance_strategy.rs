@@ -1,7 +1,9 @@
-
 use crate::models::transactions_model::TransactionModelFromDB;
 
-use super::{backtester::{Action, Strategy}, liquidity_array::LiquidityArray};
+use super::{
+    backtester::{Action, Strategy},
+    liquidity_array::LiquidityArray,
+};
 
 pub struct SimpleRebalanceStrategy {
     current_lower_tick: i32,
@@ -20,38 +22,33 @@ impl SimpleRebalanceStrategy {
 }
 
 impl Strategy for SimpleRebalanceStrategy {
+    fn initialize_strategy(&self, amount_a: u128, amount_b: u128) -> Vec<Action> {
+        vec![Action::CreatePosition {
+            position_id: String::from("simple_rebalance"),
+            lower_tick: self.current_lower_tick - self.range / 2,
+            upper_tick: self.current_lower_tick + self.range / 2,
+            amount_a,
+            amount_b,
+        }]
+    }
+
     fn update(
         &mut self,
         liquidity_array: &LiquidityArray,
         transaction: TransactionModelFromDB,
     ) -> Vec<Action> {
         match transaction.transaction_type.as_str() {
-            "IncreaseLiquidity" | "DecreaseLiquidity" => {
-                vec![]
-            }
             "Swap" => {
-                // strategy to adjust for when we cross a condition like the current tick. bad example below:
-                //    if pool.current_tick < self.current_lower_tick || pool.current_tick > self.current_upper_tick {
-                //     let new_lower_tick = pool.current_tick - self.range / 2;
-                //     let new_upper_tick = pool.current_tick + self.range / 2;
+                if liquidity_array.current_tick < self.current_lower_tick
+                    || liquidity_array.current_tick > self.current_upper_tick
+                {
+                    let actions = vec![Action::Rebalance {
+                        position_id: String::from("simple_rebalance"),
+                    }];
 
-                //     let actions = vec![
-                //         Action::RemoveLiquidity {
-                //             lower_tick: self.current_lower_tick,
-                //             upper_tick: self.current_upper_tick,
-                //             amount: 0, // Remove all
-                //         },
-                //         Action::ProvideLiquidity {
-                //             lower_tick: new_lower_tick,
-                //             upper_tick: new_upper_tick,
-                //             amount: std::cmp::min(pool.token_a_reserve, pool.token_b_reserve) / 2,
-                //         },
-                //     ];
+                    return actions;
+                }
 
-                //     self.current_lower_tick = new_lower_tick;
-                //     self.current_upper_tick = new_upper_tick;
-
-                //     actions
                 vec![]
             }
             _ => {

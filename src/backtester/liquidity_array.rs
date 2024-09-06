@@ -21,6 +21,7 @@ pub struct TickData {
 pub struct LiquidityArray {
     pub data: Vec<TickData>,
     pub positions: HashMap<String, OwnersPosition>,
+    pub total_liquidity_provided: u128,
     pub min_tick: i32,
     pub fee_rate: i16,
     pub tick_spacing: i32,
@@ -30,12 +31,12 @@ pub struct LiquidityArray {
 
 #[derive(Debug, Clone)]
 pub struct OwnersPosition {
-    owner: String,
-    lower_tick: i32,
-    upper_tick: i32,
-    liquidity: u128,
-    fees_owed_a: u128,
-    fees_owed_b: u128,
+    pub owner: String,
+    pub lower_tick: i32,
+    pub upper_tick: i32,
+    pub liquidity: u128,
+    pub fees_owed_a: u128,
+    pub fees_owed_b: u128,
 }
 
 // The liquidity array is a static array that usually has 500k indices.
@@ -61,6 +62,7 @@ impl LiquidityArray {
             min_tick,
             fee_rate,
             tick_spacing,
+            total_liquidity_provided: 0,
             current_tick: 0,
             current_sqrt_price: 0,
         }
@@ -91,11 +93,7 @@ impl LiquidityArray {
         }
     }
 
-    pub fn add_owners_position(&mut self, position: OwnersPosition) {
-        let position_id = format!(
-            "{}_{}_{}_{}",
-            position.owner, position.lower_tick, position.upper_tick, position.liquidity
-        );
+    pub fn add_owners_position(&mut self, position: OwnersPosition, position_id: String) {
         self.positions.insert(position_id.clone(), position.clone());
         self.update_liquidity_from_tx(
             TickData {
@@ -381,6 +379,12 @@ impl LiquidityArray {
                 self.data[i].liquidity -= liquidity_per_tick_spacing
             }
         }
+
+        if is_increase {
+            self.total_liquidity_provided += tick_data.liquidity
+        } else {
+            self.total_liquidity_provided -= tick_data.liquidity
+        }
     }
 }
 
@@ -549,14 +553,17 @@ mod tests {
         let amount_in = 1_000_u128;
 
         // Add a test position
-        array.add_owners_position(OwnersPosition {
-            owner: "Alice".to_string(),
-            lower_tick: -10,
-            upper_tick: 10,
-            liquidity: 1_000_000,
-            fees_owed_a: 0,
-            fees_owed_b: 0,
-        });
+        array.add_owners_position(
+            OwnersPosition {
+                owner: "Alice".to_string(),
+                lower_tick: -10,
+                upper_tick: 10,
+                liquidity: 1_000_000,
+                fees_owed_a: 0,
+                fees_owed_b: 0,
+            },
+            String::from("Alice_-10_10_1000000"),
+        );
 
         let (start_tick, end_tick, fees) = array.simulate_swap_with_fees(amount_in, true).unwrap();
 
@@ -580,14 +587,17 @@ mod tests {
         let amount_in = 200_u128;
 
         // Add a test position
-        array.add_owners_position(OwnersPosition {
-            owner: "Bob".to_string(),
-            lower_tick: -10,
-            upper_tick: 10,
-            liquidity: 1_000_000,
-            fees_owed_a: 0,
-            fees_owed_b: 0,
-        });
+        array.add_owners_position(
+            OwnersPosition {
+                owner: "Bob".to_string(),
+                lower_tick: -10,
+                upper_tick: 10,
+                liquidity: 1_000_000,
+                fees_owed_a: 0,
+                fees_owed_b: 0,
+            },
+            String::from("Bob_-10_10_1000000"),
+        );
 
         let (start_tick, end_tick, fees) = array.simulate_swap_with_fees(amount_in, false).unwrap();
 
@@ -611,14 +621,17 @@ mod tests {
         let mut array = setup_liquidity_array();
 
         // Add a test position with pre-existing fees
-        array.add_owners_position(OwnersPosition {
-            owner: "Charlie".to_string(),
-            lower_tick: -10,
-            upper_tick: 10,
-            liquidity: 1_000_000_000_000,
-            fees_owed_a: 50_000 * Q64,
-            fees_owed_b: 75_000 * Q64,
-        });
+        array.add_owners_position(
+            OwnersPosition {
+                owner: "Charlie".to_string(),
+                lower_tick: -10,
+                upper_tick: 10,
+                liquidity: 1_000_000_000_000,
+                fees_owed_a: 50_000 * Q64,
+                fees_owed_b: 75_000 * Q64,
+            },
+            String::from("Charlie_-10_10_1000000000000"),
+        );
 
         let position_id = "Charlie_-10_10_1000000000000";
         let (collected_fees_a, collected_fees_b) = array.collect_fees(position_id).unwrap();

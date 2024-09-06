@@ -1,6 +1,6 @@
 use crate::models::transactions_model::TransactionModelFromDB;
 
-use super::liquidity_array::{LiquidityArray, TickData};
+use super::liquidity_array::{LiquidityArray, OwnersPosition, TickData};
 
 pub struct Wallet {
     token_a_addr: String,
@@ -14,18 +14,27 @@ pub struct Wallet {
 
 pub enum Action {
     ProvideLiquidity {
-        lower_tick: i32,
-        upper_tick: i32,
-        amount: u128,
+        position_id: i32,
+        liquidity_to_add: u128,
     },
     RemoveLiquidity {
-        lower_tick: i32,
-        upper_tick: i32,
-        amount: u128,
+        position_id: i32,
+        liquidity_to_remove: u128,
     },
     Swap {
         amount_in: i32,
         token_in: String,
+    },
+    // Rebalance will take the OwnersPosition, remove the liquidity, swap to get 50/50 in token_a/token_b and then provide liquidity.
+    Rebalance {
+        position_id: String,
+    },
+    CreatePosition {
+        position_id: String,
+        lower_tick: i32,
+        upper_tick: i32,
+        amount_a: u128,
+        amount_b: u128,
     },
 }
 
@@ -36,6 +45,8 @@ pub struct Backtest {
 }
 
 pub trait Strategy {
+    fn initialize_strategy(&self, amount_a: u128, amount_b: u128) -> Vec<Action>;
+
     fn update(
         &mut self,
         liquidity_array: &LiquidityArray,
@@ -94,16 +105,14 @@ impl Backtest {
     fn execute_action(&mut self, action: Action) {
         match action {
             Action::ProvideLiquidity {
-                lower_tick,
-                upper_tick,
-                amount,
+                position_id,
+                liquidity_to_add,
             } => {
                 todo!();
             }
             Action::RemoveLiquidity {
-                lower_tick,
-                upper_tick,
-                amount,
+                position_id,
+                liquidity_to_remove,
             } => {
                 todo!();
             }
@@ -112,6 +121,30 @@ impl Backtest {
                 token_in,
             } => {
                 println!("Swapping");
+            }
+            Action::Rebalance { position_id } => {
+                println!("Swapping");
+            }
+            Action::CreatePosition {
+                position_id,
+                lower_tick,
+                upper_tick,
+                amount_a,
+                amount_b,
+            } => {
+                let liquidity = 0;
+
+                self.liquidity_arr.add_owners_position(
+                    OwnersPosition {
+                        owner: String::from(""),
+                        lower_tick,
+                        upper_tick,
+                        liquidity,
+                        fees_owed_a: 0,
+                        fees_owed_b: 0,
+                    },
+                    position_id,
+                )
             }
         }
     }
