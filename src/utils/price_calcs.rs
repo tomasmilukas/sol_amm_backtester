@@ -16,6 +16,35 @@ pub fn sqrt_price_to_fixed(sqrt_price: f64) -> u128 {
     (sqrt_price * Q32 as f64) as u128
 }
 
+pub fn calculate_correct_liquidity(
+    amount_a: u128,
+    amount_b: u128,
+    current_sqrt_price: u128,
+    lower_sqrt_price: u128,
+    upper_sqrt_price: u128,
+) -> u128 {
+    // Calculate liquidity for amount A
+    let liquidity_a = if current_sqrt_price <= lower_sqrt_price {
+        0
+    } else if current_sqrt_price < upper_sqrt_price {
+        amount_a * (current_sqrt_price * lower_sqrt_price / Q32) / (current_sqrt_price - lower_sqrt_price)
+    } else {
+        amount_a * lower_sqrt_price / Q32
+    };
+
+    // Calculate liquidity for amount B
+    let liquidity_b = if current_sqrt_price <= lower_sqrt_price {
+        amount_b * Q32 / (upper_sqrt_price - lower_sqrt_price)
+    } else if current_sqrt_price < upper_sqrt_price {
+        amount_b * Q32 / (upper_sqrt_price - current_sqrt_price)
+    } else {
+        0
+    };
+
+    // Return the minimum of the two calculated liquidities
+    liquidity_a.min(liquidity_b)
+}
+
 // inversed from formulas since the arrangement is different. check calculate amounts or new sqrt price calculation for full logic details.
 pub fn calculate_liquidity_for_amount_a(
     amount: u128,

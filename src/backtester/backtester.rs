@@ -3,8 +3,9 @@ use anyhow::Result;
 use crate::{
     models::transactions_model::TransactionModelFromDB,
     utils::price_calcs::{
-        calculate_amounts, calculate_liquidity_for_amount_a, calculate_liquidity_for_amount_b,
-        calculate_rebalance_amount, sqrt_price_to_fixed, tick_to_sqrt_price, Q32,
+        calculate_amounts, calculate_correct_liquidity, calculate_liquidity_for_amount_a,
+        calculate_liquidity_for_amount_b, calculate_rebalance_amount, sqrt_price_to_fixed,
+        tick_to_sqrt_price, Q32,
     },
 };
 
@@ -40,6 +41,8 @@ pub enum Action {
     Rebalance {
         position_id: String,
         rebalance_ratio: f64, // the rebalance ratio that we both want to sell at but also provide liquidity at. so if 0.6 the range will mean 60% in token_b and 40% token_a with a projection of token a increasing in price.
+        new_upper_tick: i32,
+        new_lower_tick: i32,
     },
     CreatePosition {
         position_id: String,
@@ -138,6 +141,8 @@ impl Backtest {
             Action::Rebalance {
                 position_id,
                 rebalance_ratio,
+                new_lower_tick,
+                new_upper_tick,
             } => {
                 let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
                 self.wallet.amount_a_fees_collected = fees_a;
@@ -150,19 +155,61 @@ impl Backtest {
                     sqrt_price_to_fixed(tick_to_sqrt_price(position.lower_tick)),
                     sqrt_price_to_fixed(tick_to_sqrt_price(position.upper_tick)),
                 );
+                let mut amount_a_with_fees = amount_a + fees_a;
+                let mut amount_b_with_fees = amount_b + fees_b;
 
                 // rebalance to 50/50
                 let (amount_to_sell, is_sell) = calculate_rebalance_amount(
-                    amount_a,
-                    amount_b,
+                    amount_a_with_fees,
+                    amount_b_with_fees,
                     self.liquidity_arr.current_sqrt_price,
                     (rebalance_ratio * Q32 as f64) as u128,
                 );
 
-                let (_start_tick, _end_tick, amount_out, _fees) = self
+                // TODO: Optimize for small imbalances to avoid unnecessary swaps. Also add slippage later.
+                // For now, we'll proceed with the swap even for small amounts
+                let (_, _, amount_out, fees) = self
                     .liquidity_arr
                     .simulate_swap_with_fees(amount_to_sell, is_sell)
                     .unwrap();
+
+                if is_sell {
+                    amount_a_with_fees -= amount_to_sell;
+                    amount_b_with_fees += amount_out;
+                    self.wallet.amount_a_fees_collected += fees;
+                } else {
+                    amount_a_with_fees -= amount_to_sell;
+                    amount_b_with_fees += amount_out;
+                    self.wallet.amount_b_fees_collected += fees;
+                }
+
+                let new_liquidity = calculate_correct_liquidity(
+                    amount_a_with_fees,
+                    amount_b_with_fees,
+                    self.liquidity_arr.current_sqrt_price,
+                    sqrt_price_to_fixed(tick_to_sqrt_price(new_lower_tick)),
+                    sqrt_price_to_fixed(tick_to_sqrt_price(new_upper_tick)),
+                );
+
+                // Re-provide liquidity with the rebalanced amounts
+                // DOUBLE CHECK IF THIS IS CORRECT
+                self.liquidity_arr.add_owners_position(
+                    OwnersPosition {
+                        owner: position.owner,
+                        lower_tick: new_lower_tick,
+                        upper_tick: new_upper_tick,
+                        liquidity: new_liquidity,
+                        fees_owed_a: 0,
+                        fees_owed_b: 0,
+                    },
+                    position_id.clone(),
+                );
+
+                // Log the rebalancing action
+                println!(
+                    "Rebalanced position {}: New liquidity: {}, Amount A: {}, Amount B: {}",
+                    position_id, new_liquidity, amount_a_with_fees, amount_b_with_fees
+                );
 
                 Ok(())
             }
@@ -173,23 +220,18 @@ impl Backtest {
                 amount_a,
                 amount_b,
             } => {
-                let liquidity_a = calculate_liquidity_for_amount_a(
-                    amount_a,
-                    self.liquidity_arr.current_sqrt_price,
-                    sqrt_price_to_fixed(tick_to_sqrt_price(lower_tick)),
-                );
-                let liquidity_b = calculate_liquidity_for_amount_b(
-                    amount_b,
-                    self.liquidity_arr.current_sqrt_price,
-                    sqrt_price_to_fixed(tick_to_sqrt_price(upper_tick)),
-                );
-
                 let _ = self.liquidity_arr.add_owners_position(
                     OwnersPosition {
                         owner: String::from(""),
                         lower_tick,
                         upper_tick,
-                        liquidity: liquidity_a.min(liquidity_b),
+                        liquidity: calculate_correct_liquidity(
+                            amount_a,
+                            amount_b,
+                            self.liquidity_arr.current_sqrt_price,
+                            sqrt_price_to_fixed(tick_to_sqrt_price(lower_tick)),
+                            sqrt_price_to_fixed(tick_to_sqrt_price(upper_tick)),
+                        ),
                         fees_owed_a: 0,
                         fees_owed_b: 0,
                     },
