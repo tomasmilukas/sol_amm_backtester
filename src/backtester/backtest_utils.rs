@@ -1,8 +1,9 @@
 use anyhow::Result;
+use std::default::Default;
 
 use crate::{
-    models::{pool_model::PoolModel, positions_model::PositionModel},
-    repositories::transactions_repo::{OrderDirection, TransactionRepo, TransactionRepoTrait},
+    models::{pool_model::PoolModel, positions_model::PositionModel, transactions_model::TransactionModelFromDB},
+    repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
         error::SyncError,
         price_calcs::{sqrt_price_to_fixed, sqrt_price_to_tick},
@@ -43,15 +44,14 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     transaction_repo: &T,
     mut liquidity_array: LiquidityArray,
     pool_model: PoolModel,
+    latest_transaction: Option<TransactionModelFromDB>,
     batch_size: i64,
-) -> Result<LiquidityArray, SyncError> {
-    let latest_transaction = transaction_repo
-        .fetch_highest_tx_swap(&pool_model.address)
-        .await
-        .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
-
+) -> Result<(LiquidityArray, i64), SyncError> {
     // Initialize the cursor with the latest tx_id
     let mut cursor = latest_transaction.clone().map(|tx| tx.tx_id);
+
+    // Initialize lowest_tx_id with the maximum possible i64 value
+    let mut lowest_tx_id = i64::MAX;
 
     let swap_data = latest_transaction
         .unwrap()
@@ -137,7 +137,12 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
         }
     }
 
-    Ok(liquidity_array)
+        // If we didn't process any transactions, return the original cursor
+    if lowest_tx_id == i64::MAX {
+            lowest_tx_id = cursor.unwrap_or(i64::MAX);
+    }
+
+    Ok((liquidity_array, lowest_tx_id))
 }
 
 #[cfg(test)]
@@ -148,7 +153,7 @@ mod tests {
     };
     use anyhow::Result;
     use async_trait::async_trait;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
 
     struct MockTransactionRepo {
         transactions: Vec<TransactionModelFromDB>,
@@ -171,6 +176,25 @@ mod tests {
             _order: OrderDirection,
         ) -> Result<Vec<TransactionModelFromDB>> {
             Ok(self.transactions.clone())
+        }
+    }
+
+
+    pub fn get_placeholder_tx() -> TransactionModelFromDB {
+        TransactionModelFromDB {
+            tx_id: 1,
+            signature: "sig1".to_string(),
+            pool_address: "pool1".to_string(),
+            block_time: 1000,
+            block_time_utc: Utc::now(),
+            transaction_type: "Swap".to_string(),
+            ready_for_backtesting: true,
+            data: TransactionData::Swap(SwapData {
+                token_in: "TokenAAddress".to_string(),
+                token_out: "TokenBAddress".to_string(),
+                amount_in: 50.0,
+                amount_out: 100.0,
+            }),
         }
     }
 
@@ -224,14 +248,14 @@ mod tests {
         let result_1 = sync_backwards(
             &mock_repo_1,
             initial_liquidity_array,
-            pool_model.clone(),
+            pool_model.clone(),Some(get_placeholder_tx()),
             10,
         )
         .await;
 
         assert!(result_1.is_ok(), "sync_backwards should succeed");
 
-        let final_liquidity_array = result_1.unwrap();
+        let final_liquidity_array = result_1.unwrap().0;
 
         assert!(
             final_liquidity_array.current_tick >= starting_tick,
@@ -260,8 +284,9 @@ mod tests {
             }],
         };
 
-        let result_2 = sync_backwards(&mock_repo_2, final_liquidity_array, pool_model, 10).await;
-        let final_liquidity_array_2 = result_2.unwrap();
+        // The passed 
+        let result_2 = sync_backwards(&mock_repo_2, final_liquidity_array, pool_model,Some(get_placeholder_tx()), 10).await;
+        let final_liquidity_array_2 = result_2.unwrap().0;
 
         assert!(
             final_liquidity_array_2.current_tick <= starting_tick,

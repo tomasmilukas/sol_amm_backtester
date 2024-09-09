@@ -1,6 +1,6 @@
 use crate::try_calc;
 
-use super::error::PriceCalcError;
+use super::error::{LiquidityArrayError, PriceCalcError};
 
 pub const Q32: u128 = 1u128 << 32;
 
@@ -27,7 +27,8 @@ pub fn calculate_correct_liquidity(
     let liquidity_a = if current_sqrt_price <= lower_sqrt_price {
         0
     } else if current_sqrt_price < upper_sqrt_price {
-        amount_a * (current_sqrt_price * lower_sqrt_price / Q32) / (current_sqrt_price - lower_sqrt_price)
+        amount_a * (current_sqrt_price * lower_sqrt_price / Q32)
+            / (current_sqrt_price - lower_sqrt_price)
     } else {
         amount_a * lower_sqrt_price / Q32
     };
