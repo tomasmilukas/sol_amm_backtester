@@ -228,24 +228,27 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
     let strategy: Box<dyn Strategy> = match strategy {
         "no_rebalance" => Box::new(SimpleRebalanceStrategy::new(
             original_starting_liquidity_arr.current_tick,
-            200,
+            config.range,
         )),
         "simple_rebalance" => Box::new(SimpleRebalanceStrategy::new(
             original_starting_liquidity_arr.current_tick,
-            200,
+            config.range,
         )),
         _ => return Err(anyhow::anyhow!("Unknown strategy: {}", strategy)),
     };
 
+    strategy.initialize_strategy(config.token_a_amount, config.token_b_amount);
     let mut backtest = Backtest::new(original_starting_liquidity_arr, wallet, strategy);
 
-    backtest.sync_forward(
-        &tx_repo,
-        lowest_tx_id,
-        latest_transaction.unwrap().tx_id,
-        &config.pool_address,
-        500,
-    );
+    backtest
+        .sync_forward(
+            &tx_repo,
+            lowest_tx_id,
+            latest_transaction.unwrap().tx_id,
+            &config.pool_address,
+            500,
+        )
+        .await;
 
     Ok(())
 }
