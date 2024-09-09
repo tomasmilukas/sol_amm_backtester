@@ -4,6 +4,7 @@ use crate::utils::{
     error::LiquidityArrayError,
     price_calcs::{
         calculate_amounts, calculate_new_sqrt_price, sqrt_price_to_fixed, tick_to_sqrt_price, Q32,
+        Q64,
     },
 };
 
@@ -31,7 +32,9 @@ pub struct OwnersPosition {
     pub owner: String,
     pub lower_tick: i32,
     pub upper_tick: i32,
+    // LIQUIDITY AND PRICING STORED IN Q32
     pub liquidity: u128,
+    // ALL FEES STORED IN Q64
     pub fees_owed_a: u128,
     pub fees_owed_b: u128,
 }
@@ -164,7 +167,7 @@ impl LiquidityArray {
                 || (position.lower_tick >= end_tick && position.upper_tick <= start_tick)
             {
                 let position_liquidity = position.liquidity;
-                let fee_share = (total_fees * Q32 / total_liquidity) * position_liquidity;
+                let fee_share = (total_fees * Q64 / total_liquidity) * position_liquidity;
 
                 if is_sell {
                     position.fees_owed_a += fee_share;
@@ -177,10 +180,11 @@ impl LiquidityArray {
 
     pub fn collect_fees(&mut self, position_id: &str) -> Result<(u128, u128), LiquidityArrayError> {
         if let Some(position) = self.positions.get_mut(position_id) {
-            let fees_a = position.fees_owed_a / Q32;
-            let fees_b = position.fees_owed_b / Q32;
+            let fees_a = position.fees_owed_a / Q64;
+            let fees_b = position.fees_owed_b / Q64;
             position.fees_owed_a = 0;
             position.fees_owed_b = 0;
+
             Ok((fees_a, fees_b))
         } else {
             Err(LiquidityArrayError::PositionNotFound(
@@ -414,10 +418,12 @@ mod tests {
         let (start_tick, end_tick, _amount_out, fees) =
             array.simulate_swap_with_fees(amount_in, true).unwrap();
 
-        assert_eq!(fees, 30, "3% of 100should be 30");
+        assert_eq!(fees, 30, "3% of 100 should be 30");
 
         // Check if fees were accrued correctly
         let position = array.positions.get("Alice_-10_10_1000000").unwrap();
+        println!("POSITION: {:?}", position);
+
         assert_eq!(
             position.fees_owed_a, 4980615919000000,
             "All fees should be accrued to token A for a sell"
@@ -454,13 +460,14 @@ mod tests {
         let position = array.positions.get("Bob_-10_10_1000000").unwrap();
 
         // TAKE INTO ACCOUNT THESE FEES ARE MULTIPLIED BY Q32 for precision. U can see in collect_fees it is divided to remove it.
+        println!("POSITION: {:?}", position);
         assert_eq!(
             position.fees_owed_b, 996123183000000,
-            "All fees should be accrued to token A for a buy"
+            "All fees should be accrued to token B for a buy"
         );
         assert_eq!(
             position.fees_owed_a, 0,
-            "No fees should be accrued to token B for a buy"
+            "No fees should be accrued to token A for a buy"
         );
     }
 
@@ -475,8 +482,8 @@ mod tests {
                 lower_tick: -10,
                 upper_tick: 10,
                 liquidity: 1_000_000_000_000,
-                fees_owed_a: 50_000 * Q32,
-                fees_owed_b: 75_000 * Q32,
+                fees_owed_a: 50_000 * Q64,
+                fees_owed_b: 75_000 * Q64,
             },
             String::from("Charlie_-10_10_1000000000000"),
         );

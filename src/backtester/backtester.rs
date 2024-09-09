@@ -143,6 +143,7 @@ impl Backtest {
                 let actions = self
                     .strategy
                     .update(&self.liquidity_arr, transaction.clone());
+                
                 for action in actions {
                     self.execute_action(action)
                         .map_err(|e| SyncError::Other(e.to_string()))?;
