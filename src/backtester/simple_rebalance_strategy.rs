@@ -60,4 +60,11 @@ impl Strategy for SimpleRebalanceStrategy {
             }
         }
     }
+
+    fn finalize_strategy(&self, starting_sqrt_price: u128) -> Vec<Action> {
+        vec![Action::FinalizeStrategy {
+            position_id: String::from("simple_rebalance"),
+            starting_sqrt_price,
+        }]
+    }
 }

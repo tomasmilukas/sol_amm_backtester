@@ -14,6 +14,11 @@ use crate::{
 
 use super::liquidity_array::{LiquidityArray, OwnersPosition, TickData};
 
+pub struct StartInfo {
+    pub token_a_amount: u128,
+    pub token_b_amount: u128,
+}
+
 pub struct Wallet {
     pub token_a_addr: String,
     pub token_b_addr: String,
@@ -21,10 +26,10 @@ pub struct Wallet {
     pub amount_token_b: u128,
     pub token_a_decimals: i16,
     pub token_b_decimals: i16,
-    pub impermanent_loss: f64,
     pub amount_a_fees_collected: u128,
     pub amount_b_fees_collected: u128,
     pub total_profit: f64,
+    pub total_profit_pct: f64,
 }
 
 pub enum Action {
@@ -54,12 +59,17 @@ pub enum Action {
         amount_a: u128,
         amount_b: u128,
     },
+    FinalizeStrategy {
+        position_id: String,
+        starting_sqrt_price: u128,
+    },
 }
 
 pub struct Backtest {
-    wallet: Wallet,
-    liquidity_arr: LiquidityArray,
-    strategy: Box<dyn Strategy>,
+    pub wallet: Wallet,
+    pub liquidity_arr: LiquidityArray,
+    pub strategy: Box<dyn Strategy>,
+    pub start_info: StartInfo,
 }
 
 pub trait Strategy {
@@ -70,15 +80,23 @@ pub trait Strategy {
         liquidity_array: &LiquidityArray,
         transaction: TransactionModelFromDB,
     ) -> Vec<Action>;
+
+    fn finalize_strategy(&self, starting_sqrt_price: u128) -> Vec<Action>;
 }
 
 impl Backtest {
     pub fn new(
+        amount_a: u128,
+        amount_b: u128,
         liquidity_arr: LiquidityArray,
         wallet_state: Wallet,
         strategy: Box<dyn Strategy>,
     ) -> Self {
         Self {
+            start_info: StartInfo {
+                token_a_amount: amount_a * 10u128.pow(wallet_state.token_a_decimals as u32),
+                token_b_amount: amount_b * 10u128.pow(wallet_state.token_b_decimals as u32),
+            },
             liquidity_arr,
             wallet: wallet_state,
             strategy,
@@ -94,6 +112,7 @@ impl Backtest {
         batch_size: i64,
     ) -> Result<(), SyncError> {
         let mut cursor = Some(start_tx_id);
+        let starting_price = self.liquidity_arr.current_sqrt_price;
 
         while cursor.is_some() && cursor.unwrap() <= end_tx_id {
             let transactions = transaction_repo
@@ -133,8 +152,19 @@ impl Backtest {
 
                         let is_sell = swap_data.token_in == self.wallet.token_a_addr;
 
+                        // Adjust the amount based on the correct token decimals
+                        let adjusted_amount = if is_sell {
+                            // If selling token A, use token A decimals
+                            swap_data.amount_in as u128
+                                * 10u128.pow(self.wallet.token_a_decimals as u32)
+                        } else {
+                            // If selling token B, use token B decimals
+                            swap_data.amount_in as u128
+                                * 10u128.pow(self.wallet.token_b_decimals as u32)
+                        };
+
                         self.liquidity_arr
-                            .simulate_swap_with_fees(swap_data.amount_in as u128, is_sell)?;
+                            .simulate_swap_with_fees(adjusted_amount, is_sell)?;
                     }
                     _ => {}
                 }
@@ -143,7 +173,7 @@ impl Backtest {
                 let actions = self
                     .strategy
                     .update(&self.liquidity_arr, transaction.clone());
-                
+
                 for action in actions {
                     self.execute_action(action)
                         .map_err(|e| SyncError::Other(e.to_string()))?;
@@ -156,6 +186,8 @@ impl Backtest {
                 break;
             }
         }
+
+        self.strategy.finalize_strategy(starting_price);
 
         Ok(())
     }
@@ -298,6 +330,41 @@ impl Backtest {
 
                 self.wallet.amount_token_a -= amount_a;
                 self.wallet.amount_token_b -= amount_b;
+
+                Ok(())
+            }
+            Action::FinalizeStrategy {
+                position_id,
+                starting_sqrt_price,
+            } => {
+                let position = self.liquidity_arr.remove_owners_position(&position_id)?;
+
+                self.wallet.amount_a_fees_collected += position.fees_owed_a;
+                self.wallet.amount_b_fees_collected += position.fees_owed_b;
+
+                let (amount_a, amount_b) = calculate_amounts(
+                    position.liquidity,
+                    self.liquidity_arr.current_sqrt_price,
+                    sqrt_price_to_fixed(tick_to_sqrt_price(position.lower_tick)),
+                    sqrt_price_to_fixed(tick_to_sqrt_price(position.upper_tick)),
+                );
+
+                self.wallet.amount_token_a += amount_a;
+                self.wallet.amount_token_b += amount_b;
+
+                let initial_value_a = self.start_info.token_a_amount as f64
+                    + (self.start_info.token_b_amount as f64
+                        * (starting_sqrt_price as f64 / Q32 as f64).powi(2));
+
+                // Calculate the final value in terms of token A
+                let final_value_a = (self.wallet.amount_token_a
+                    + self.wallet.amount_a_fees_collected)
+                    as f64
+                    + ((self.wallet.amount_token_b + self.wallet.amount_b_fees_collected) as f64
+                        * (self.liquidity_arr.current_sqrt_price as f64 / Q32 as f64).powi(2));
+
+                self.wallet.total_profit = final_value_a - initial_value_a;
+                self.wallet.total_profit_pct = (self.wallet.total_profit / initial_value_a) * 100.0;
 
                 Ok(())
             }
