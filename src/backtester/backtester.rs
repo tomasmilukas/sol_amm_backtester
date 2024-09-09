@@ -2,26 +2,29 @@ use anyhow::Result;
 
 use crate::{
     models::transactions_model::TransactionModelFromDB,
-    utils::price_calcs::{
-        calculate_amounts, calculate_correct_liquidity, calculate_liquidity_for_amount_a,
-        calculate_liquidity_for_amount_b, calculate_rebalance_amount, sqrt_price_to_fixed,
-        tick_to_sqrt_price, Q32,
+    repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
+    utils::{
+        error::{BacktestError, SyncError},
+        price_calcs::{
+            calculate_amounts, calculate_correct_liquidity, calculate_rebalance_amount,
+            sqrt_price_to_fixed, tick_to_sqrt_price, Q32,
+        },
     },
 };
 
 use super::liquidity_array::{LiquidityArray, OwnersPosition, TickData};
 
 pub struct Wallet {
-    token_a_addr: String,
-    token_b_addr: String,
-    amount_token_a: u128,
-    amount_token_b: u128,
-    token_a_decimals: i16,
-    token_b_decimals: i16,
-    impermanent_loss: f64,
-    amount_a_fees_collected: u128,
-    amount_b_fees_collected: u128,
-    total_profit: f64,
+    pub token_a_addr: String,
+    pub token_b_addr: String,
+    pub amount_token_a: u128,
+    pub amount_token_b: u128,
+    pub token_a_decimals: i16,
+    pub token_b_decimals: i16,
+    pub impermanent_loss: f64,
+    pub amount_a_fees_collected: u128,
+    pub amount_b_fees_collected: u128,
+    pub total_profit: f64,
 }
 
 pub enum Action {
@@ -82,42 +85,81 @@ impl Backtest {
         }
     }
 
-    pub fn process_transaction(&mut self, transaction: TransactionModelFromDB) {
-        match transaction.transaction_type.as_str() {
-            "IncreaseLiquidity" | "DecreaseLiquidity" => {
-                let liquidity_data = transaction.data.to_liquidity_data().unwrap();
+    pub async fn sync_forward<T: TransactionRepoTrait>(
+        &mut self,
+        transaction_repo: &T,
+        start_tx_id: i64,
+        end_tx_id: i64,
+        pool_address: &str,
+        batch_size: i64,
+    ) -> Result<(), SyncError> {
+        let mut cursor = Some(start_tx_id);
 
-                let tick_data = TickData {
-                    lower_tick: liquidity_data.tick_lower.unwrap(),
-                    upper_tick: liquidity_data.tick_upper.unwrap(),
-                    liquidity: liquidity_data.liquidity_amount.parse::<u128>().unwrap(),
-                };
+        while cursor.is_some() && cursor.unwrap() <= end_tx_id {
+            let transactions = transaction_repo
+                .fetch_transactions(pool_address, cursor, batch_size, OrderDirection::Ascending)
+                .await
+                .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
-                let is_increase = transaction.transaction_type.as_str() == "IncreaseLiquidity";
-
-                self.liquidity_arr
-                    .update_liquidity_from_tx(tick_data, is_increase);
+            if transactions.is_empty() {
+                break;
             }
-            "Swap" => {
-                let swap_data = transaction.data.to_swap_data().unwrap();
 
-                let is_sell = swap_data.token_in == self.wallet.token_a_addr;
+            for transaction in transactions.iter() {
+                match transaction.transaction_type.as_str() {
+                    "IncreaseLiquidity" | "DecreaseLiquidity" => {
+                        let liquidity_data = transaction
+                            .data
+                            .to_liquidity_data()
+                            .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                self.liquidity_arr
-                    .simulate_swap_with_fees((swap_data.amount_in) as u128, is_sell);
+                        let tick_data = TickData {
+                            lower_tick: liquidity_data.tick_lower.unwrap(),
+                            upper_tick: liquidity_data.tick_upper.unwrap(),
+                            liquidity: liquidity_data.liquidity_amount.parse::<u128>().unwrap(),
+                        };
+
+                        let is_increase =
+                            transaction.transaction_type.as_str() == "IncreaseLiquidity";
+
+                        self.liquidity_arr
+                            .update_liquidity_from_tx(tick_data, is_increase);
+                    }
+                    "Swap" => {
+                        let swap_data = transaction
+                            .data
+                            .to_swap_data()
+                            .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+                        let is_sell = swap_data.token_in == self.wallet.token_a_addr;
+
+                        self.liquidity_arr
+                            .simulate_swap_with_fees(swap_data.amount_in as u128, is_sell)?;
+                    }
+                    _ => {}
+                }
+
+                // Process strategy actions
+                let actions = self
+                    .strategy
+                    .update(&self.liquidity_arr, transaction.clone());
+                for action in actions {
+                    self.execute_action(action)
+                        .map_err(|e| SyncError::Other(e.to_string()))?;
+                }
             }
-            _ => {}
+
+            cursor = transactions.last().map(|t| t.tx_id + 1);
+
+            if transactions.len() < batch_size as usize || cursor.unwrap() > end_tx_id {
+                break;
+            }
         }
 
-        let actions = self
-            .strategy
-            .update(&self.liquidity_arr, transaction.clone());
-        for action in actions {
-            self.execute_action(action);
-        }
+        Ok(())
     }
 
-    fn execute_action(&mut self, action: Action) -> Result<()> {
+    fn execute_action(&mut self, action: Action) -> Result<(), BacktestError> {
         match action {
             Action::ProvideLiquidity {
                 position_id,
@@ -145,10 +187,12 @@ impl Backtest {
                 new_upper_tick,
             } => {
                 let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
+
                 self.wallet.amount_a_fees_collected = fees_a;
                 self.wallet.amount_b_fees_collected = fees_b;
 
                 let position = self.liquidity_arr.remove_owners_position(&position_id)?;
+
                 let (amount_a, amount_b) = calculate_amounts(
                     position.liquidity,
                     self.liquidity_arr.current_sqrt_price,
@@ -158,7 +202,6 @@ impl Backtest {
                 let mut amount_a_with_fees = amount_a + fees_a;
                 let mut amount_b_with_fees = amount_b + fees_b;
 
-                // rebalance to 50/50
                 let (amount_to_sell, is_sell) = calculate_rebalance_amount(
                     amount_a_with_fees,
                     amount_b_with_fees,
@@ -170,8 +213,7 @@ impl Backtest {
                 // For now, we'll proceed with the swap even for small amounts
                 let (_, _, amount_out, fees) = self
                     .liquidity_arr
-                    .simulate_swap_with_fees(amount_to_sell, is_sell)
-                    .unwrap();
+                    .simulate_swap_with_fees(amount_to_sell, is_sell)?;
 
                 if is_sell {
                     amount_a_with_fees -= amount_to_sell;
@@ -192,7 +234,6 @@ impl Backtest {
                 );
 
                 // Re-provide liquidity with the rebalanced amounts
-                // DOUBLE CHECK IF THIS IS CORRECT
                 self.liquidity_arr.add_owners_position(
                     OwnersPosition {
                         owner: position.owner,
@@ -220,7 +261,23 @@ impl Backtest {
                 amount_a,
                 amount_b,
             } => {
-                let _ = self.liquidity_arr.add_owners_position(
+                if amount_a > self.wallet.amount_token_a {
+                    return Err(BacktestError::InsufficientBalance {
+                        requested: amount_a,
+                        available: self.wallet.amount_token_a,
+                        token: self.wallet.token_a_addr.clone(),
+                    });
+                }
+
+                if amount_b > self.wallet.amount_token_b {
+                    return Err(BacktestError::InsufficientBalance {
+                        requested: amount_b,
+                        available: self.wallet.amount_token_b,
+                        token: self.wallet.token_b_addr.clone(),
+                    });
+                }
+
+                self.liquidity_arr.add_owners_position(
                     OwnersPosition {
                         owner: String::from(""),
                         lower_tick,
@@ -237,6 +294,9 @@ impl Backtest {
                     },
                     position_id,
                 );
+
+                self.wallet.amount_token_a -= amount_a;
+                self.wallet.amount_token_b -= amount_b;
 
                 Ok(())
             }

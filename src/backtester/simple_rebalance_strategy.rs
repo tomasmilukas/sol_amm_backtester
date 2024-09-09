@@ -39,12 +39,15 @@ impl Strategy for SimpleRebalanceStrategy {
     ) -> Vec<Action> {
         match transaction.transaction_type.as_str() {
             "Swap" => {
-                if liquidity_array.current_tick < self.current_lower_tick
-                    || liquidity_array.current_tick > self.current_upper_tick
+                let current_tick = liquidity_array.current_tick;
+
+                if current_tick < self.current_lower_tick || current_tick > self.current_upper_tick
                 {
                     let actions = vec![Action::Rebalance {
                         position_id: String::from("simple_rebalance"),
                         rebalance_ratio: 0.5,
+                        new_lower_tick: current_tick - self.range / 2,
+                        new_upper_tick: current_tick + self.range / 2,
                     }];
 
                     return actions;

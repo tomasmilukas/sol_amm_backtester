@@ -19,17 +19,25 @@ use crate::{
 
 use anyhow::{Context, Result};
 use api::{positions_api::PositionsApi, transactions_api::TransactionApi};
-use backtester::backtest_utils::{create_full_liquidity_range, sync_backwards};
+use backtester::{
+    backtest_utils::{create_full_liquidity_range, sync_backwards},
+    backtester::{Backtest, Strategy, Wallet},
+    simple_rebalance_strategy::SimpleRebalanceStrategy,
+};
 use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
-use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
+use repositories::{
+    positions_repo::PositionsRepo,
+    transactions_repo::{TransactionRepo, TransactionRepoTrait},
+};
 use services::{
     positions_service::PositionsService, transactions_service::TransactionsService,
     transactions_sync_amm_service::create_amm_service,
 };
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc};
+use utils::error::SyncError;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -185,13 +193,59 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
 
     let tx_repo = TransactionRepo::new(pool);
 
+    let latest_transaction = tx_repo
+        .fetch_highest_tx_swap(&pool_data.address)
+        .await
+        .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+
     // Create the liquidity range "at present" from db.
     let liquidity_range_arr =
         create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
 
     // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
-    let original_starting_liquidity_arr =
-        sync_backwards(&tx_repo, liquidity_range_arr, pool_data, 10_000).await?;
+    let (original_starting_liquidity_arr, lowest_tx_id) = sync_backwards(
+        &tx_repo,
+        liquidity_range_arr,
+        pool_data.clone(),
+        latest_transaction.clone(),
+        10_000,
+    )
+    .await?;
+
+    let wallet = Wallet {
+        token_a_addr: pool_data.token_a_address,
+        token_b_addr: pool_data.token_b_address,
+        amount_token_a: 0,
+        amount_token_b: 0,
+        token_a_decimals: pool_data.token_a_decimals,
+        token_b_decimals: pool_data.token_b_decimals,
+        impermanent_loss: 0.0,
+        amount_a_fees_collected: 0,
+        amount_b_fees_collected: 0,
+        total_profit: 0.0,
+    };
+
+    let strategy: Box<dyn Strategy> = match strategy {
+        "no_rebalance" => Box::new(SimpleRebalanceStrategy::new(
+            original_starting_liquidity_arr.current_tick,
+            200,
+        )),
+        "simple_rebalance" => Box::new(SimpleRebalanceStrategy::new(
+            original_starting_liquidity_arr.current_tick,
+            200,
+        )),
+        _ => return Err(anyhow::anyhow!("Unknown strategy: {}", strategy)),
+    };
+
+    let mut backtest = Backtest::new(original_starting_liquidity_arr, wallet, strategy);
+
+    backtest.sync_forward(
+        &tx_repo,
+        lowest_tx_id,
+        latest_transaction.unwrap().tx_id,
+        &config.pool_address,
+        500,
+    );
 
     Ok(())
 }

@@ -1,15 +1,9 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
-
-use crate::{
-    try_calc,
-    utils::{
-        error::PriceCalcError,
-        price_calcs::{
-            calculate_amounts, calculate_new_sqrt_price, sqrt_price_to_fixed, tick_to_sqrt_price,
-            Q32,
-        },
+use crate::utils::{
+    error::LiquidityArrayError,
+    price_calcs::{
+        calculate_amounts, calculate_new_sqrt_price, sqrt_price_to_fixed, tick_to_sqrt_price, Q32,
     },
 };
 
@@ -108,7 +102,10 @@ impl LiquidityArray {
         );
     }
 
-    pub fn remove_owners_position(&mut self, position_id: &str) -> Result<OwnersPosition> {
+    pub fn remove_owners_position(
+        &mut self,
+        position_id: &str,
+    ) -> Result<OwnersPosition, LiquidityArrayError> {
         if let Some(position) = self.positions.remove(position_id) {
             self.update_liquidity_from_tx(
                 TickData {
@@ -120,7 +117,9 @@ impl LiquidityArray {
             );
             Ok(position)
         } else {
-            return Err(anyhow::anyhow!("Position not found"));
+            Err(LiquidityArrayError::PositionNotFound(
+                position_id.to_string(),
+            ))
         }
     }
 
@@ -145,7 +144,7 @@ impl LiquidityArray {
         &mut self,
         amount_in: u128,
         is_sell: bool,
-    ) -> Result<(i32, i32, u128, u128), PriceCalcError> {
+    ) -> Result<(i32, i32, u128, u128), LiquidityArrayError> {
         let fees = amount_in * self.fee_rate as u128 / 10000;
         let amount_after_fees = amount_in - fees;
 
@@ -176,7 +175,7 @@ impl LiquidityArray {
         }
     }
 
-    pub fn collect_fees(&mut self, position_id: &str) -> Result<(u128, u128)> {
+    pub fn collect_fees(&mut self, position_id: &str) -> Result<(u128, u128), LiquidityArrayError> {
         if let Some(position) = self.positions.get_mut(position_id) {
             let fees_a = position.fees_owed_a / Q32;
             let fees_b = position.fees_owed_b / Q32;
@@ -184,7 +183,9 @@ impl LiquidityArray {
             position.fees_owed_b = 0;
             Ok((fees_a, fees_b))
         } else {
-            return Err(anyhow::anyhow!("Position not found"));
+            Err(LiquidityArrayError::PositionNotFound(
+                position_id.to_string(),
+            ))
         }
     }
 
@@ -193,7 +194,7 @@ impl LiquidityArray {
         &mut self,
         amount_in: u128,
         is_sell: bool,
-    ) -> Result<(i32, i32, u128), PriceCalcError> {
+    ) -> Result<(i32, i32, u128), LiquidityArrayError> {
         let mut current_tick = self.current_tick;
         let mut mut_current_sqrt_price = self.current_sqrt_price;
 
