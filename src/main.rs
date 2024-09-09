@@ -219,10 +219,10 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
         amount_token_b: 0,
         token_a_decimals: pool_data.token_a_decimals,
         token_b_decimals: pool_data.token_b_decimals,
-        impermanent_loss: 0.0,
         amount_a_fees_collected: 0,
         amount_b_fees_collected: 0,
         total_profit: 0.0,
+        total_profit_pct: 0.0,
     };
 
     let strategy: Box<dyn Strategy> = match strategy {
@@ -237,8 +237,17 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
         _ => return Err(anyhow::anyhow!("Unknown strategy: {}", strategy)),
     };
 
-    strategy.initialize_strategy(config.token_a_amount, config.token_b_amount);
-    let mut backtest = Backtest::new(original_starting_liquidity_arr, wallet, strategy);
+    strategy.initialize_strategy(
+        config.token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32),
+        config.token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32),
+    );
+    let mut backtest = Backtest::new(
+        config.token_a_amount,
+        config.token_b_amount,
+        original_starting_liquidity_arr,
+        wallet,
+        strategy,
+    );
 
     backtest
         .sync_forward(
@@ -249,6 +258,11 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
             500,
         )
         .await;
+
+    println!(
+        "BACTESTING DONE! THIS IS YOUR TOTAL PROFIT {} AND PROFIT PCT {}",
+        backtest.wallet.total_profit, backtest.wallet.total_profit
+    );
 
     Ok(())
 }
