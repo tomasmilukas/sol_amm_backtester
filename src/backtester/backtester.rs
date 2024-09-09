@@ -4,7 +4,7 @@ use crate::{
     models::transactions_model::TransactionModelFromDB,
     utils::price_calcs::{
         calculate_amounts, calculate_liquidity_for_amount_a, calculate_liquidity_for_amount_b,
-        calculate_rebalance_amount, sqrt_price_to_fixed, tick_to_sqrt_price, Q64,
+        calculate_rebalance_amount, sqrt_price_to_fixed, tick_to_sqrt_price, Q32,
     },
 };
 
@@ -156,8 +156,13 @@ impl Backtest {
                     amount_a,
                     amount_b,
                     self.liquidity_arr.current_sqrt_price,
-                    (rebalance_ratio * Q64 as f64) as u128, // Q64 fits exactly into f64 and the ratio is below 1 so it works out.
+                    (rebalance_ratio * Q32 as f64) as u128,
                 );
+
+                let (_start_tick, _end_tick, amount_out, _fees) = self
+                    .liquidity_arr
+                    .simulate_swap_with_fees(amount_to_sell, is_sell)
+                    .unwrap();
 
                 Ok(())
             }
