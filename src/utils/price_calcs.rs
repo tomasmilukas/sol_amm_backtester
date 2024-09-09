@@ -3,7 +3,6 @@ use crate::try_calc;
 use super::error::PriceCalcError;
 
 pub const Q32: u128 = 1u128 << 32;
-pub const Q64: u128 = 1u128 << 64;
 
 pub fn tick_to_sqrt_price(tick: i32) -> f64 {
     1.0001f64.powf(tick as f64 / 2.0)
@@ -131,13 +130,13 @@ pub fn calculate_rebalance_amount(
     amount_a: u128,
     amount_b: u128,
     current_sqrt_price: u128,
-    rebalance_ratio: u128, // Use u128 for ratio, where 1.0 = Q64
+    rebalance_ratio: u128, // Use u128 for ratio, where 1.0 = Q32
 ) -> (u128, bool) {
-    // Calculate total value in terms of token A
-    let total_value_a = amount_a + (amount_b * Q64 / current_sqrt_price);
+    // Calculate total value in terms of token A. We multiply amount_b by Q32 (even tho its scaled alrdy) to unscale the sqrt price.
+    let total_value_a = amount_a + (amount_b * Q32 / current_sqrt_price);
 
     // Calculate target amount of token A
-    let target_amount_a = total_value_a * rebalance_ratio / Q64;
+    let target_amount_a = total_value_a * rebalance_ratio / Q32;
 
     if amount_a > target_amount_a {
         // Need to sell token A
@@ -145,7 +144,7 @@ pub fn calculate_rebalance_amount(
     } else {
         // Need to sell token B
         let target_amount_b =
-            (total_value_a * (Q64 - rebalance_ratio) / Q64) * current_sqrt_price / Q64;
+            (total_value_a * (Q32 - rebalance_ratio) / Q32) * current_sqrt_price / Q32;
         (amount_b - target_amount_b, false)
     }
 }
@@ -226,5 +225,98 @@ mod tests {
             amount_a >= 19 * 10_i32.pow(9) as u128 && amount_b == 0,
             "amount a is full and b is 0"
         );
+    }
+
+    #[test]
+    fn test_calculate_rebalance_amount() {
+        // Test case: Need to sell token A
+        {
+            let amount_a = 1500 * Q32;
+            let amount_b = 500 * Q32;
+            let current_sqrt_price = sqrt_price_to_fixed(1.0);
+            let rebalance_ratio = Q32 / 2; // 50%
+
+            let (amount_to_sell, is_sell_a) =
+                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
+
+            assert!(amount_to_sell > 0, "Should sell some token A");
+            assert_eq!(is_sell_a, true, "Should sell token A");
+            assert!(
+                amount_to_sell <= 500 * Q32,
+                "Should not sell more than the imbalance"
+            );
+        }
+
+        // Test case: Need to sell token B
+        {
+            let amount_a = 500 * Q32;
+            let amount_b = 1500 * Q32;
+            let current_sqrt_price = sqrt_price_to_fixed(1.0);
+            let rebalance_ratio = Q32 / 2; // 50%
+
+            let (amount_to_sell, is_sell_a) =
+                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
+
+            assert!(amount_to_sell > 0, "Should sell some token B");
+            assert_eq!(is_sell_a, false, "Should sell token B");
+            assert!(
+                amount_to_sell <= 500 * Q32,
+                "Should not sell more than the imbalance"
+            );
+        }
+
+        // Test case 4: Rebalance to 60/40
+        {
+            let amount_a = 1000 * Q32;
+            let amount_b = 1000 * Q32;
+            let current_sqrt_price = sqrt_price_to_fixed(1.0);
+            let rebalance_ratio = 6 * Q32 / 10; // 60%
+
+            let (amount_to_sell, is_sell_a) =
+                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
+
+            assert!(amount_to_sell > 0, "Should sell some token B");
+            assert_eq!(is_sell_a, false, "Should sell token B");
+            assert!(
+                amount_to_sell <= 200 * Q32,
+                "Should sell approximately 10% of token B"
+            );
+        }
+
+        // Test case: Edge case - all token A
+        {
+            let amount_a = 1000 * Q32;
+            let amount_b = 0;
+            let current_sqrt_price = sqrt_price_to_fixed(1.0);
+            let rebalance_ratio = Q32 / 2; // 50%
+
+            let (amount_to_sell, is_sell_a) =
+                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
+
+            assert!(amount_to_sell > 0, "Should sell some token A");
+            assert_eq!(is_sell_a, true, "Should sell token A");
+            assert!(
+                amount_to_sell <= 500 * Q32,
+                "Should sell approximately half of token A"
+            );
+        }
+
+        // Test case: Edge case - all token B
+        {
+            let amount_a = 0;
+            let amount_b = 1000 * Q32;
+            let current_sqrt_price = sqrt_price_to_fixed(1.0);
+            let rebalance_ratio = Q32 / 2; // 50%
+
+            let (amount_to_sell, is_sell_a) =
+                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
+
+            assert!(amount_to_sell > 0, "Should sell some token B");
+            assert_eq!(is_sell_a, false, "Should sell token B");
+            assert!(
+                amount_to_sell <= 500 * Q32,
+                "Should sell approximately half of token B"
+            );
+        }
     }
 }

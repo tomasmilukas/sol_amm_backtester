@@ -8,7 +8,7 @@ use crate::{
         error::PriceCalcError,
         price_calcs::{
             calculate_amounts, calculate_new_sqrt_price, sqrt_price_to_fixed, tick_to_sqrt_price,
-            Q32, Q64,
+            Q32,
         },
     },
 };
@@ -145,16 +145,16 @@ impl LiquidityArray {
         &mut self,
         amount_in: u128,
         is_sell: bool,
-    ) -> Result<(i32, i32, u128), PriceCalcError> {
+    ) -> Result<(i32, i32, u128, u128), PriceCalcError> {
         let fees = amount_in * self.fee_rate as u128 / 10000;
         let amount_after_fees = amount_in - fees;
 
-        let (start_tick, end_tick) = self.simulate_swap(amount_after_fees, is_sell)?;
+        let (start_tick, end_tick, amount_out) = self.simulate_swap(amount_after_fees, is_sell)?;
 
         // Simplistic distribution since technically ticks dont evenly distribute fees but will suffice for now.
         self.distribute_fees(fees, start_tick, end_tick, is_sell);
 
-        Ok((start_tick, end_tick, fees))
+        Ok((start_tick, end_tick, amount_out, fees))
     }
 
     fn distribute_fees(&mut self, total_fees: u128, start_tick: i32, end_tick: i32, is_sell: bool) {
@@ -165,7 +165,7 @@ impl LiquidityArray {
                 || (position.lower_tick >= end_tick && position.upper_tick <= start_tick)
             {
                 let position_liquidity = position.liquidity;
-                let fee_share = (total_fees * Q64 / total_liquidity) * position_liquidity;
+                let fee_share = (total_fees * Q32 / total_liquidity) * position_liquidity;
 
                 if is_sell {
                     position.fees_owed_a += fee_share;
@@ -178,8 +178,8 @@ impl LiquidityArray {
 
     pub fn collect_fees(&mut self, position_id: &str) -> Result<(u128, u128)> {
         if let Some(position) = self.positions.get_mut(position_id) {
-            let fees_a = position.fees_owed_a / Q64;
-            let fees_b = position.fees_owed_b / Q64;
+            let fees_a = position.fees_owed_a / Q32;
+            let fees_b = position.fees_owed_b / Q32;
             position.fees_owed_a = 0;
             position.fees_owed_b = 0;
             Ok((fees_a, fees_b))
@@ -193,11 +193,12 @@ impl LiquidityArray {
         &mut self,
         amount_in: u128,
         is_sell: bool,
-    ) -> Result<(i32, i32), PriceCalcError> {
+    ) -> Result<(i32, i32, u128), PriceCalcError> {
         let mut current_tick = self.current_tick;
         let mut mut_current_sqrt_price = self.current_sqrt_price;
 
         let mut remaining_amount = amount_in;
+        let mut amount_out = 0;
 
         let starting_tick = current_tick;
         let mut ending_tick = starting_tick;
@@ -228,16 +229,22 @@ impl LiquidityArray {
             if is_sell {
                 if amount_a_in_tick_range > remaining_amount {
                     // Update sqrt price
-                    mut_current_sqrt_price = calculate_new_sqrt_price(
+                    let updated_current_sqrt_price = calculate_new_sqrt_price(
                         mut_current_sqrt_price,
                         liquidity,
                         remaining_amount,
                         is_sell,
                     )?;
 
+                    let amount_b_out =
+                        (liquidity * (mut_current_sqrt_price - updated_current_sqrt_price)) / Q32;
+
+                    mut_current_sqrt_price = updated_current_sqrt_price;
+                    amount_out += amount_b_out;
                     remaining_amount = 0;
                 } else {
                     // Cross to the next tick range
+                    amount_out += amount_b_in_tick_range;
                     remaining_amount -= amount_a_in_tick_range;
                     current_tick -= self.tick_spacing;
                     mut_current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(current_tick));
@@ -246,16 +253,22 @@ impl LiquidityArray {
                 #[warn(clippy::collapsible_else_if)]
                 if amount_b_in_tick_range > remaining_amount {
                     // Update sqrt price
-                    mut_current_sqrt_price = calculate_new_sqrt_price(
+                    let updated_current_sqrt_price = calculate_new_sqrt_price(
                         mut_current_sqrt_price,
                         liquidity,
                         remaining_amount,
                         is_sell,
                     )?;
 
+                    let amount_a_out = liquidity
+                        * (Q32 / updated_current_sqrt_price - Q32 / mut_current_sqrt_price);
+
+                    mut_current_sqrt_price = updated_current_sqrt_price;
+                    amount_out += amount_a_out;
                     remaining_amount = 0;
                 } else {
                     // Cross to the next tick range
+                    amount_out += amount_a_in_tick_range;
                     remaining_amount -= amount_b_in_tick_range;
                     current_tick += self.tick_spacing;
                     mut_current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(current_tick));
@@ -268,7 +281,7 @@ impl LiquidityArray {
         self.current_tick = ending_tick;
         self.current_sqrt_price = mut_current_sqrt_price;
 
-        Ok((starting_tick, ending_tick))
+        Ok((starting_tick, ending_tick, amount_out))
     }
 
     pub fn update_liquidity_from_tx(&mut self, tick_data: TickData, is_increase: bool) {
@@ -397,7 +410,8 @@ mod tests {
             String::from("Alice_-10_10_1000000"),
         );
 
-        let (start_tick, end_tick, fees) = array.simulate_swap_with_fees(amount_in, true).unwrap();
+        let (start_tick, end_tick, _amount_out, fees) =
+            array.simulate_swap_with_fees(amount_in, true).unwrap();
 
         assert_eq!(fees, 30, "3% of 100should be 30");
 
@@ -431,13 +445,14 @@ mod tests {
             String::from("Bob_-10_10_1000000"),
         );
 
-        let (start_tick, end_tick, fees) = array.simulate_swap_with_fees(amount_in, false).unwrap();
+        let (start_tick, end_tick, _amount_out, fees) =
+            array.simulate_swap_with_fees(amount_in, false).unwrap();
 
         assert_eq!(fees, 6, "3% of 200 should be 6");
 
         let position = array.positions.get("Bob_-10_10_1000000").unwrap();
 
-        // TAKE INTO ACCOUNT THESE FEES ARE MULTIPLIED BY Q64 for precision. U can see in collect_fees it is divided to remove it.
+        // TAKE INTO ACCOUNT THESE FEES ARE MULTIPLIED BY Q32 for precision. U can see in collect_fees it is divided to remove it.
         assert_eq!(
             position.fees_owed_b, 996123183000000,
             "All fees should be accrued to token A for a buy"
@@ -459,8 +474,8 @@ mod tests {
                 lower_tick: -10,
                 upper_tick: 10,
                 liquidity: 1_000_000_000_000,
-                fees_owed_a: 50_000 * Q64,
-                fees_owed_b: 75_000 * Q64,
+                fees_owed_a: 50_000 * Q32,
+                fees_owed_b: 75_000 * Q32,
             },
             String::from("Charlie_-10_10_1000000000000"),
         );
