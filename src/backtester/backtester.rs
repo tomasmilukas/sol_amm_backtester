@@ -371,3 +371,167 @@ impl Backtest {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    struct MockStrategy;
+
+    impl Strategy for MockStrategy {
+        fn initialize_strategy(&self, _amount_a: u128, _amount_b: u128) -> Vec<Action> {
+            vec![]
+        }
+
+        fn update(
+            &mut self,
+            _liquidity_array: &LiquidityArray,
+            _transaction: TransactionModelFromDB,
+        ) -> Vec<Action> {
+            vec![]
+        }
+
+        fn finalize_strategy(&self, _starting_sqrt_price: u128) -> Vec<Action> {
+            vec![]
+        }
+    }
+
+    struct MockTransactionRepo {
+        transactions: Arc<Mutex<Vec<TransactionModelFromDB>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TransactionRepoTrait for MockTransactionRepo {
+        async fn fetch_transactions(
+            &self,
+            _pool_address: &str,
+            _cursor: Option<i64>,
+            _batch_size: i64,
+            _order: OrderDirection,
+        ) -> Result<Vec<TransactionModelFromDB>, anyhow::Error> {
+            Ok(self.transactions.lock().await.clone())
+        }
+
+        async fn fetch_highest_tx_swap(
+            &self,
+            pool_address: &str,
+        ) -> Result<Option<TransactionModelFromDB>> {
+            Ok(None)
+        }
+    }
+
+    fn create_test_liquidity_array() -> LiquidityArray {
+        LiquidityArray::new(-500_000, 500_000, 10, 500)
+    }
+
+    #[tokio::test]
+    async fn test_backtest_initialization() {
+        let liquidity_arr = create_test_liquidity_array();
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: 1000,
+            amount_token_b: 1000,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: 0,
+            amount_b_fees_collected: 0,
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
+
+        let backtest = Backtest::new(1000, 1000, liquidity_arr, wallet, strategy);
+
+        assert_eq!(backtest.start_info.token_a_amount, 1_000_000_000);
+        assert_eq!(backtest.start_info.token_b_amount, 1_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_create_position() {
+        let liquidity_arr = create_test_liquidity_array();
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: 1_000_000_000,
+            amount_token_b: 1_000_000_000,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: 0,
+            amount_b_fees_collected: 0,
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
+
+        let mut backtest = Backtest::new(1000, 1000, liquidity_arr, wallet, strategy);
+
+        let action = Action::CreatePosition {
+            position_id: "test_position".to_string(),
+            lower_tick: 900,
+            upper_tick: 1100,
+            amount_a: 500_000_000,
+            amount_b: 500_000_000,
+        };
+
+        backtest.execute_action(action).unwrap();
+
+        assert_eq!(backtest.wallet.amount_token_a, 500_000_000);
+        assert_eq!(backtest.wallet.amount_token_b, 500_000_000);
+
+        assert!(backtest
+            .liquidity_arr
+            .positions
+            .contains_key("test_position"));
+    }
+
+    #[tokio::test]
+    async fn test_finalize_strategy() {
+        let mut liquidity_arr = create_test_liquidity_array();
+        // Add a position to the liquidity array
+        liquidity_arr.add_owners_position(
+            OwnersPosition {
+                owner: "".to_string(),
+                lower_tick: 900,
+                upper_tick: 1100,
+                liquidity: 1_000_000,
+                fees_owed_a: 1000,
+                fees_owed_b: 2000,
+            },
+            "test_position".to_string(),
+        );
+
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: 500_000_000,
+            amount_token_b: 500_000_000,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: 0,
+            amount_b_fees_collected: 0,
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
+
+        let mut backtest = Backtest::new(1000, 1000, liquidity_arr, wallet, strategy);
+
+        backtest.liquidity_arr.current_sqrt_price = 1_100_000;
+
+        let action = Action::FinalizeStrategy {
+            position_id: "test_position".to_string(),
+            starting_sqrt_price: 1_000_000,
+        };
+
+        backtest.execute_action(action).unwrap();
+
+        assert_eq!(backtest.wallet.amount_a_fees_collected, 1000);
+        assert_eq!(backtest.wallet.amount_b_fees_collected, 2000);
+
+        assert!(backtest.wallet.total_profit > 0.0);
+        assert!(backtest.wallet.total_profit_pct > 0.0);
+    }
+}

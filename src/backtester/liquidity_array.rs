@@ -422,8 +422,6 @@ mod tests {
 
         // Check if fees were accrued correctly
         let position = array.positions.get("Alice_-10_10_1000000").unwrap();
-        println!("POSITION: {:?}", position);
-
         assert_eq!(
             position.fees_owed_a, 4980615919000000,
             "All fees should be accrued to token A for a sell"
@@ -460,7 +458,6 @@ mod tests {
         let position = array.positions.get("Bob_-10_10_1000000").unwrap();
 
         // TAKE INTO ACCOUNT THESE FEES ARE MULTIPLIED BY Q32 for precision. U can see in collect_fees it is divided to remove it.
-        println!("POSITION: {:?}", position);
         assert_eq!(
             position.fees_owed_b, 996123183000000,
             "All fees should be accrued to token B for a buy"

@@ -47,26 +47,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: cargo run [sync|backtest] [options]");
+        println!("Usage: cargo run [sync|backtest]");
         return Ok(());
     }
 
     match args[1].as_str() {
         "sync" => {
-            let days = if args.len() > 2 {
-                args[2].parse().unwrap_or(config.sync_days)
-            } else {
-                config.sync_days
-            };
-            sync_data(&config, days).await?;
+            sync_data(&config, config.sync_days).await?;
         }
         "backtest" => {
-            if args.len() < 3 {
-                println!("Usage: cargo run backtest <strategy_name>");
-                return Ok(());
-            }
-            let strategy = &args[2];
-            run_backtest(&config, strategy).await?;
+            run_backtest(&config).await?;
         }
         _ => {
             println!("Unknown command. Use 'sync' or 'backtest'.");
@@ -169,8 +159,8 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     Ok(())
 }
 
-async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
-    println!("Running backtest with strategy: {}", strategy);
+async fn run_backtest(config: &AppConfig) -> Result<()> {
+    println!("Running backtest with strategy: {}", &config.strategy);
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -212,11 +202,14 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
     )
     .await?;
 
+    let amount_token_a = config.token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32);
+    let amount_token_b = config.token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32);
+
     let wallet = Wallet {
         token_a_addr: pool_data.token_a_address,
         token_b_addr: pool_data.token_b_address,
-        amount_token_a: 0,
-        amount_token_b: 0,
+        amount_token_a,
+        amount_token_b,
         token_a_decimals: pool_data.token_a_decimals,
         token_b_decimals: pool_data.token_b_decimals,
         amount_a_fees_collected: 0,
@@ -225,22 +218,20 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
         total_profit_pct: 0.0,
     };
 
-    let strategy: Box<dyn Strategy> = match strategy {
-        "no_rebalance" => Box::new(SimpleRebalanceStrategy::new(
+    let strategy: Box<dyn Strategy> = match config.strategy.as_str() {
+        "NO_REBALANCE" => Box::new(SimpleRebalanceStrategy::new(
             original_starting_liquidity_arr.current_tick,
             config.range,
         )),
-        "simple_rebalance" => Box::new(SimpleRebalanceStrategy::new(
+        "SIMPLE_REBALANCE" => Box::new(SimpleRebalanceStrategy::new(
             original_starting_liquidity_arr.current_tick,
             config.range,
         )),
-        _ => return Err(anyhow::anyhow!("Unknown strategy: {}", strategy)),
+        _ => return Err(anyhow::anyhow!("Unknown strategy: {}", &config.strategy)),
     };
 
-    strategy.initialize_strategy(
-        config.token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32),
-        config.token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32),
-    );
+    strategy.initialize_strategy(amount_token_a, amount_token_b);
+
     let mut backtest = Backtest::new(
         config.token_a_amount,
         config.token_b_amount,
@@ -255,9 +246,10 @@ async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
             lowest_tx_id,
             latest_transaction.unwrap().tx_id,
             &config.pool_address,
-            500,
+            1000,
         )
-        .await;
+        .await
+        .unwrap();
 
     println!(
         "BACTESTING DONE! THIS IS YOUR TOTAL PROFIT {} AND PROFIT PCT {}",

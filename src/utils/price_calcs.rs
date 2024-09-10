@@ -1,6 +1,6 @@
 use crate::try_calc;
 
-use super::error::{LiquidityArrayError, PriceCalcError};
+use super::error::PriceCalcError;
 
 pub const Q32: u128 = 1u128 << 32;
 pub const Q64: u128 = 1u128 << 64;
@@ -45,29 +45,6 @@ pub fn calculate_correct_liquidity(
 
     // Return the minimum of the two calculated liquidities
     liquidity_a.min(liquidity_b)
-}
-
-// inversed from formulas since the arrangement is different. check calculate amounts or new sqrt price calculation for full logic details.
-pub fn calculate_liquidity_for_amount_a(
-    amount: u128,
-    current_sqrt_price: u128,
-    lower_sqrt_price: u128,
-) -> u128 {
-    if current_sqrt_price <= lower_sqrt_price {
-        return 0;
-    }
-    (amount * current_sqrt_price * lower_sqrt_price / Q32) / (current_sqrt_price - lower_sqrt_price)
-}
-
-pub fn calculate_liquidity_for_amount_b(
-    amount: u128,
-    current_sqrt_price: u128,
-    upper_sqrt_price: u128,
-) -> u128 {
-    if current_sqrt_price >= upper_sqrt_price {
-        return 0;
-    }
-    (amount * Q32) / (upper_sqrt_price - current_sqrt_price)
 }
 
 pub fn calculate_amounts(
