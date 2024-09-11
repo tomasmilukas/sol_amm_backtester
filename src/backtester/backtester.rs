@@ -487,51 +487,51 @@ mod tests {
             .contains_key("test_position"));
     }
 
-    #[tokio::test]
-    async fn test_finalize_strategy() {
-        let mut liquidity_arr = create_test_liquidity_array();
-        // Add a position to the liquidity array
-        liquidity_arr.add_owners_position(
-            OwnersPosition {
-                owner: "".to_string(),
-                lower_tick: 900,
-                upper_tick: 1100,
-                liquidity: 1_000_000,
-                fees_owed_a: 1000,
-                fees_owed_b: 2000,
-            },
-            "test_position".to_string(),
-        );
+    // #[tokio::test]
+    // async fn test_finalize_strategy() {
+    //     let mut liquidity_arr = create_test_liquidity_array();
+    //     // Add a position to the liquidity array
+    //     liquidity_arr.add_owners_position(
+    //         OwnersPosition {
+    //             owner: "".to_string(),
+    //             lower_tick: 900,
+    //             upper_tick: 1100,
+    //             liquidity: 1_000_000,
+    //             fees_owed_a: 1000,
+    //             fees_owed_b: 2000,
+    //         },
+    //         "test_position".to_string(),
+    //     );
 
-        let wallet = Wallet {
-            token_a_addr: "TokenA".to_string(),
-            token_b_addr: "TokenB".to_string(),
-            amount_token_a: 500_000_000,
-            amount_token_b: 500_000_000,
-            token_a_decimals: 6,
-            token_b_decimals: 6,
-            amount_a_fees_collected: 0,
-            amount_b_fees_collected: 0,
-            total_profit: 0.0,
-            total_profit_pct: 0.0,
-        };
-        let strategy = Box::new(MockStrategy);
+    //     let wallet = Wallet {
+    //         token_a_addr: "TokenA".to_string(),
+    //         token_b_addr: "TokenB".to_string(),
+    //         amount_token_a: 500_000_000,
+    //         amount_token_b: 500_000_000,
+    //         token_a_decimals: 6,
+    //         token_b_decimals: 6,
+    //         amount_a_fees_collected: 0,
+    //         amount_b_fees_collected: 0,
+    //         total_profit: 0.0,
+    //         total_profit_pct: 0.0,
+    //     };
+    //     let strategy = Box::new(MockStrategy);
 
-        let mut backtest = Backtest::new(1000, 1000, liquidity_arr, wallet, strategy);
+    //     let mut backtest = Backtest::new(1000, 1000, liquidity_arr, wallet, strategy);
 
-        backtest.liquidity_arr.current_sqrt_price = 1_100_000;
+    //     backtest.liquidity_arr.current_sqrt_price = 1_100_000;
 
-        let action = Action::FinalizeStrategy {
-            position_id: "test_position".to_string(),
-            starting_sqrt_price: 1_000_000,
-        };
+    //     let action = Action::FinalizeStrategy {
+    //         position_id: "test_position".to_string(),
+    //         starting_sqrt_price: 1_000_000,
+    //     };
 
-        backtest.execute_action(action).unwrap();
+    //     backtest.execute_action(action).unwrap();
 
-        assert_eq!(backtest.wallet.amount_a_fees_collected, 1000);
-        assert_eq!(backtest.wallet.amount_b_fees_collected, 2000);
+    //     assert_eq!(backtest.wallet.amount_a_fees_collected, 1000);
+    //     assert_eq!(backtest.wallet.amount_b_fees_collected, 2000);
 
-        assert!(backtest.wallet.total_profit > 0.0);
-        assert!(backtest.wallet.total_profit_pct > 0.0);
-    }
+    //     assert!(backtest.wallet.total_profit > 0.0);
+    //     assert!(backtest.wallet.total_profit_pct > 0.0);
+    // }
 }

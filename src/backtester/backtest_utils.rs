@@ -2,7 +2,10 @@ use anyhow::Result;
 use std::default::Default;
 
 use crate::{
-    models::{pool_model::PoolModel, positions_model::PositionModel, transactions_model::TransactionModelFromDB},
+    models::{
+        pool_model::PoolModel, positions_model::PositionModel,
+        transactions_model::TransactionModelFromDB,
+    },
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
         error::SyncError,
@@ -137,9 +140,9 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
         }
     }
 
-        // If we didn't process any transactions, return the original cursor
+    // If we didn't process any transactions, return the original cursor
     if lowest_tx_id == i64::MAX {
-            lowest_tx_id = cursor.unwrap_or(i64::MAX);
+        lowest_tx_id = cursor.unwrap_or(i64::MAX);
     }
 
     Ok((liquidity_array, lowest_tx_id))
@@ -148,12 +151,10 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::transactions_model::{
-         SwapData, TransactionData, TransactionModelFromDB,
-    };
+    use crate::models::transactions_model::{SwapData, TransactionData, TransactionModelFromDB};
     use anyhow::Result;
     use async_trait::async_trait;
-    use chrono::{DateTime, Utc};
+    use chrono::Utc;
 
     struct MockTransactionRepo {
         transactions: Vec<TransactionModelFromDB>,
@@ -178,7 +179,6 @@ mod tests {
             Ok(self.transactions.clone())
         }
     }
-
 
     pub fn get_placeholder_tx() -> TransactionModelFromDB {
         TransactionModelFromDB {
@@ -248,7 +248,8 @@ mod tests {
         let result_1 = sync_backwards(
             &mock_repo_1,
             initial_liquidity_array,
-            pool_model.clone(),Some(get_placeholder_tx()),
+            pool_model.clone(),
+            Some(get_placeholder_tx()),
             10,
         )
         .await;
@@ -259,11 +260,11 @@ mod tests {
 
         assert!(
             final_liquidity_array.current_tick >= starting_tick,
-            "The SELL reversed transaction should have increased the tick."
+            "The SELL reversed transaction (ie buy) should have increased the tick."
         );
         assert!(
             final_liquidity_array.current_sqrt_price > starting_sqrt_price_u128,
-            "The SELL reversed transaction should have increased the sqrtPrice."
+            "The SELL reversed transaction (ie buy) should have increased the sqrtPrice."
         );
 
         let mock_repo_2 = MockTransactionRepo {
@@ -283,27 +284,38 @@ mod tests {
                 }),
             }],
         };
+        println!("PASSED THIS 2?");
 
-        // The passed 
-        let result_2 = sync_backwards(&mock_repo_2, final_liquidity_array, pool_model,Some(get_placeholder_tx()), 10).await;
+        // The passed
+        let result_2 = sync_backwards(
+            &mock_repo_2,
+            final_liquidity_array,
+            pool_model,
+            Some(get_placeholder_tx()),
+            10,
+        )
+        .await;
         let final_liquidity_array_2 = result_2.unwrap().0;
+        println!("PASSED THIS 3?");
 
         assert!(
             final_liquidity_array_2.current_tick <= starting_tick,
-            "The BUY reversed transaction should have decreased the tick."
+            "The BUY reversed transaction (ie sell) should have decreased the tick."
         );
         assert!(
             final_liquidity_array_2.current_sqrt_price < starting_sqrt_price_u128,
-            "The BUY reversed transaction should have decreased the sqrtPrice."
+            "The BUY reversed transaction (ie sell) should have decreased the sqrtPrice."
         );
 
         // SHOULD END UP QUITE CLOSE TO EACH OTHER. OBV BECAUSE OF PRICE DIFF IT DOESNT.
-        let sqrt_price_diff = (final_liquidity_array_2.current_sqrt_price as i128 - starting_sqrt_price_u128 as i128).abs();
+        let sqrt_price_diff = (final_liquidity_array_2.current_sqrt_price as i128
+            - starting_sqrt_price_u128 as i128)
+            .abs();
         let percentage_diff = (sqrt_price_diff as f64 / starting_sqrt_price_u128 as f64) * 100.0;
 
         assert!(
-            percentage_diff < 0.001, 
-            "Final sqrt_price should be within 0.001% of starting sqrt_price. Actual difference: {}%", 
+            percentage_diff < 0.001,
+            "Final sqrt_price should be within 0.001% of starting sqrt_price. Actual difference: {}%",
             percentage_diff
         );
     }
