@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, thread, time::Duration};
 
 use crate::utils::{
     error::LiquidityArrayError,
@@ -69,12 +69,15 @@ impl LiquidityArray {
     }
 
     pub fn get_index(&self, tick: i32, is_upper_tick: bool) -> usize {
-        let index = ((tick - self.min_tick) / self.tick_spacing) as usize;
-        if is_upper_tick {
-            index.saturating_sub(1).min(self.data.len() - 1)
+        let tick_index = (tick - self.min_tick) as f64 / self.tick_spacing as f64;
+
+        let index = if is_upper_tick {
+            tick_index.ceil() as usize - 1
         } else {
-            index.min(self.data.len() - 1)
-        }
+            tick_index.floor() as usize
+        };
+
+        index.clamp(0, self.data.len() - 1)
     }
 
     pub fn update_liquidity(&mut self, tick_data: TickData) {
@@ -194,99 +197,81 @@ impl LiquidityArray {
     }
 
     // is_sell represents the directional movement of token_a. In SOL/USDC case is_sell represents selling SOL for USDC.
+    // High level explanation: use sqrt prices to track ratios of tokens within ticks. Liquidity is constant and doesnt need to be touched during swaps.
     pub fn simulate_swap(
         &mut self,
         amount_in: u128,
         is_sell: bool,
     ) -> Result<(i32, i32, u128), LiquidityArrayError> {
         let mut current_tick = self.current_tick;
-        let mut mut_current_sqrt_price = self.current_sqrt_price;
-
+        let mut current_sqrt_price = self.current_sqrt_price;
         let mut remaining_amount = amount_in;
         let mut amount_out = 0;
-
         let starting_tick = current_tick;
-        let mut ending_tick = starting_tick;
 
-        // High level explanation: sqrt prices are differently calculate if we are within a tick range or at the corners of ticks.
-        // Since Liquidity is constant at a tick range, we need a variable that can efficiently track the ratio of token_a and token_b in the range.
-        // Thats the sqrt price and it can be very granular. We cant use ticks since they offer 0 granurality. If tick_spacing is 2, the pool would only have 3 ratios (100/0, 50/50, 0/100).
         while remaining_amount > 0 {
             let index = self.get_index(current_tick, is_sell);
             let liquidity = self.data[index].liquidity;
             let (lower_tick, upper_tick) =
                 (self.data[index].lower_tick, self.data[index].upper_tick);
 
-            let lower_sqrt_price_fixed = sqrt_price_to_fixed(tick_to_sqrt_price(lower_tick));
-            let upper_sqrt_price_fixed = sqrt_price_to_fixed(tick_to_sqrt_price(upper_tick));
+            let lower_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(lower_tick));
+            let upper_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(upper_tick));
 
-            // we get amounts in the tick_range by using the sqrt_price
-            let (amount_a_in_tick_range, amount_b_in_tick_range) = calculate_amounts(
-                liquidity,
-                mut_current_sqrt_price,
-                lower_sqrt_price_fixed,
-                upper_sqrt_price_fixed,
-            );
-
-            // After getting the amounts, we have some branching logic.
-            // If we remain in range, we simply update sqrtPrice but not tick. This will be used to get the new ratio in the next loop.
-            // If we leave range, we must update tick and sqrtPrice and keep the loop going.
-            if is_sell {
-                if amount_a_in_tick_range > remaining_amount {
-                    // Update sqrt price
-                    let updated_current_sqrt_price = calculate_new_sqrt_price(
-                        mut_current_sqrt_price,
-                        liquidity,
-                        remaining_amount,
-                        is_sell,
-                    )?;
-
-                    let amount_b_out =
-                        (liquidity * (mut_current_sqrt_price - updated_current_sqrt_price)) / Q32;
-
-                    mut_current_sqrt_price = updated_current_sqrt_price;
-                    amount_out += amount_b_out;
-                    remaining_amount = 0;
-                } else {
-                    // Cross to the next tick range
-                    amount_out += amount_b_in_tick_range;
-                    remaining_amount -= amount_a_in_tick_range;
-                    current_tick -= self.tick_spacing;
-                    mut_current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(current_tick));
-                }
+            let (max_in, sqrt_price_target) = if is_sell {
+                // in sell we have to compute how much liquidity below the price exists that can be exchanged for token_a amount.
+                let max_in =
+                    liquidity * (current_sqrt_price - lower_sqrt_price) / current_sqrt_price;
+                (max_in, lower_sqrt_price)
             } else {
-                #[warn(clippy::collapsible_else_if)]
-                if amount_b_in_tick_range > remaining_amount {
-                    // Update sqrt price
-                    let updated_current_sqrt_price = calculate_new_sqrt_price(
-                        mut_current_sqrt_price,
-                        liquidity,
-                        remaining_amount,
-                        is_sell,
-                    )?;
+                // in buy we have to compute how much liquidity above the price exists that can be exchanged for token_b amount.
+                let max_in = liquidity * (upper_sqrt_price - current_sqrt_price) / Q32;
+                (max_in, upper_sqrt_price)
+            };
 
-                    let amount_a_out = liquidity
-                        * (Q32 / updated_current_sqrt_price - Q32 / mut_current_sqrt_price);
+            if remaining_amount <= max_in {
+                // Swap completes within this tick range
+                let new_sqrt_price = calculate_new_sqrt_price(
+                    current_sqrt_price,
+                    liquidity,
+                    remaining_amount,
+                    is_sell,
+                )?;
 
-                    mut_current_sqrt_price = updated_current_sqrt_price;
-                    amount_out += amount_a_out;
-                    remaining_amount = 0;
+                let actual_output = if is_sell {
+                    liquidity * (current_sqrt_price - new_sqrt_price) / Q32
                 } else {
-                    // Cross to the next tick range
-                    amount_out += amount_a_in_tick_range;
-                    remaining_amount -= amount_b_in_tick_range;
+                    liquidity * (new_sqrt_price - current_sqrt_price) / Q32
+                };
+
+                amount_out += actual_output;
+                current_sqrt_price = new_sqrt_price;
+                break;
+            } else {
+                // Use all liquidity in this tick range and move to the next
+                let actual_output = if is_sell {
+                    liquidity * (current_sqrt_price - sqrt_price_target) / Q32
+                } else {
+                    liquidity * (sqrt_price_target - current_sqrt_price) / Q32
+                };
+
+                amount_out += actual_output;
+                remaining_amount -= max_in;
+
+                if is_sell {
+                    current_tick -= self.tick_spacing;
+                    current_sqrt_price = sqrt_price_target;
+                } else {
                     current_tick += self.tick_spacing;
-                    mut_current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(current_tick));
+                    current_sqrt_price = sqrt_price_target;
                 }
             }
-
-            ending_tick = current_tick;
         }
 
-        self.current_tick = ending_tick;
-        self.current_sqrt_price = mut_current_sqrt_price;
+        self.current_tick = current_tick;
+        self.current_sqrt_price = current_sqrt_price;
 
-        Ok((starting_tick, ending_tick, amount_out))
+        Ok((starting_tick, current_tick, amount_out))
     }
 
     pub fn update_liquidity_from_tx(&mut self, tick_data: TickData, is_increase: bool) {
