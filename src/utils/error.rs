@@ -1,6 +1,12 @@
 use std::error::Error;
 use std::fmt;
 
+use uint::construct_uint;
+
+construct_uint! {
+    pub struct U256(4);
+}
+
 #[derive(Debug)]
 pub struct PriceCalcError(pub String);
 
@@ -53,8 +59,8 @@ impl From<PriceCalcError> for SyncError {
 #[derive(Debug)]
 pub enum BacktestError {
     InsufficientBalance {
-        requested: u128,
-        available: u128,
+        requested: U256,
+        available: U256,
         token: String,
     },
     InvalidLiquidity,
@@ -128,14 +134,4 @@ impl From<PriceCalcError> for LiquidityArrayError {
     fn from(error: PriceCalcError) -> Self {
         LiquidityArrayError::PriceCalculation(error)
     }
-}
-
-#[macro_export]
-macro_rules! try_calc {
-    ($expr:expr) => {
-        match $expr {
-            Some(val) => Ok(val),
-            None => Err(PriceCalcError(stringify!($expr).to_string())),
-        }
-    };
 }
