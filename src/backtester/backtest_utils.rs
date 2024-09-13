@@ -8,7 +8,7 @@ use crate::{
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
         error::SyncError,
-        price_calcs::{sqrt_price_to_tick, sqrt_price_to_u256, U256},
+        price_calcs::{price_to_tick, tick_to_sqrt_price_u256, U256},
     },
 };
 
@@ -65,17 +65,21 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     let is_sell = swap_data.token_in == pool_model.token_a_address;
 
     if is_sell {
-        let sqrt_price = (swap_data.amount_out / swap_data.amount_in).sqrt();
-        let tick = sqrt_price_to_tick(sqrt_price);
+        let tick = price_to_tick(
+            swap_data.amount_out / swap_data.amount_in,
+            pool_model.token_a_decimals - pool_model.token_b_decimals,
+        );
 
-        liquidity_array.current_sqrt_price = sqrt_price_to_u256(sqrt_price);
         liquidity_array.current_tick = tick;
+        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     } else {
-        let sqrt_price = (swap_data.amount_in / swap_data.amount_out).sqrt();
-        let tick = sqrt_price_to_tick(sqrt_price);
+        let tick = price_to_tick(
+            swap_data.amount_in / swap_data.amount_out,
+            pool_model.token_a_decimals - pool_model.token_b_decimals,
+        );
 
-        liquidity_array.current_sqrt_price = sqrt_price_to_u256(sqrt_price);
         liquidity_array.current_tick = tick;
+        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     };
 
     loop {
@@ -207,8 +211,8 @@ mod tests {
             data: TransactionData::Swap(SwapData {
                 token_in: "TokenAAddress".to_string(),
                 token_out: "TokenBAddress".to_string(),
-                amount_in: 50.0,
-                amount_out: 100.0,
+                amount_in: 5.301077056,
+                amount_out: 718.793826,
             }),
         }
     }
@@ -227,8 +231,8 @@ mod tests {
                 data: TransactionData::Swap(SwapData {
                     token_in: "TokenAAddress".to_string(),
                     token_out: "TokenBAddress".to_string(),
-                    amount_in: 50.0,
-                    amount_out: 100.0,
+                    amount_in: 5.301077056,
+                    amount_out: 718.793826,
                 }),
             }],
         };
@@ -242,7 +246,7 @@ mod tests {
             token_b_address: "TokenBAddress".to_string(),
             token_a_vault: "TokenAVault".to_string(),
             token_b_vault: "TokenBVault".to_string(),
-            token_a_decimals: 6,
+            token_a_decimals: 9,
             token_b_decimals: 6,
             tick_spacing: 1,
             total_liquidity: Some("".to_string()),
@@ -250,21 +254,21 @@ mod tests {
             last_updated_at: Utc::now(),
         };
 
-        let starting_tick = 6931;
-        let lower_tick = 5000;
-        let upper_tick = 8000;
+        let starting_tick = -19969;
+        let lower_tick = -20000;
+        let upper_tick = -17000;
 
         let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
 
         let liquidity = calculate_liquidity(
-            U256::from(200 * 10_u128.pow(9)),
-            U256::from(20000 * 10_u128.pow(6)),
+            U256::from(500 * 10_u128.pow(9)),
+            U256::from(50000 * 10_u128.pow(6)),
             starting_sqrt_price_u256,
             tick_to_sqrt_price_u256(lower_tick),
             tick_to_sqrt_price_u256(upper_tick),
         );
 
-        let mut initial_liquidity_array = LiquidityArray::new(-10000, 10000, 2, 300);
+        let mut initial_liquidity_array = LiquidityArray::new(-30000, 30000, 2, 300);
         initial_liquidity_array.update_liquidity(TickData {
             lower_tick,
             upper_tick,

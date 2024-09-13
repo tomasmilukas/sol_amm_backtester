@@ -143,7 +143,7 @@ impl LiquidityArray {
         let mut sum = U256::zero();
 
         for range_item in range {
-            sum += U256::from(range_item.liquidity)
+            sum += range_item.liquidity
         }
 
         sum
@@ -167,7 +167,6 @@ impl LiquidityArray {
 
     fn distribute_fees(&mut self, total_fees: U256, start_tick: i32, end_tick: i32, is_sell: bool) {
         let total_liquidity = self.get_liquidity_in_range(start_tick, end_tick);
-        println!("ENTER DISTRIBUTE FEES FN");
 
         for position in self.positions.values_mut() {
             println!("POSITION INFO: {:?}", position);
@@ -219,23 +218,8 @@ impl LiquidityArray {
         let mut amount_out = U256::zero();
         let starting_tick = current_tick;
 
-        fn calculate_output(
-            liquidity: U256,
-            sqrt_price_start: U256,
-            sqrt_price_end: U256,
-            is_sell: bool,
-        ) -> U256 {
-            if is_sell {
-                // Δy = L * (√P_start - √P_end)
-                liquidity * (sqrt_price_start - sqrt_price_end) / Q64
-            } else {
-                // Δx = L * (√P_end - √P_start) / (√P_start * √P_end)
-                liquidity * (sqrt_price_end - sqrt_price_start) / sqrt_price_start
-            }
-        }
-
         while remaining_amount > U256::zero() {
-            thread::sleep(Duration::from_secs(1));
+            // thread::sleep(Duration::from_millis(1000));
 
             let index = self.get_index(current_tick, is_sell);
             let liquidity = self.data[index].liquidity;
@@ -244,26 +228,20 @@ impl LiquidityArray {
             let lower_sqrt_price = tick_to_sqrt_price_u256(lower_tick);
             let upper_sqrt_price = tick_to_sqrt_price_u256(upper_tick);
 
-            println!(
-                "PRICES: {} {} {} {} {} {}",
+            let (amount_a_in_range, amount_b_in_range) = calculate_amounts(
+                liquidity,
                 current_sqrt_price,
+                lower_sqrt_price,
                 upper_sqrt_price,
-                upper_sqrt_price - current_sqrt_price,
-                remaining_amount,
-                is_sell,
-                liquidity
             );
 
-            let (max_in, sqrt_price_target) = if is_sell {
-                let max_in =
-                    liquidity * (current_sqrt_price - lower_sqrt_price) / current_sqrt_price;
-                (max_in, lower_sqrt_price)
+            // Flipped max_in since when we are selling token a, we need to see how much liquidity exists at "token_b" (friction) to handle the conversion.
+            // Liquidity is token agnostic, thats why we dont need to use decimals. It can sound confusing with var names but u can see it as liquidity_lower and liquidity_upper.
+            let (max_in) = if is_sell {
+                amount_b_in_range
             } else {
-                let max_in = liquidity * (upper_sqrt_price - current_sqrt_price) / upper_sqrt_price;
-                (max_in, upper_sqrt_price)
+                amount_a_in_range
             };
-
-            println!("STUFF: {} {}", max_in, sqrt_price_target);
 
             if remaining_amount <= max_in {
                 let new_sqrt_price = calculate_new_sqrt_price(
@@ -272,22 +250,39 @@ impl LiquidityArray {
                     remaining_amount,
                     is_sell,
                 );
-                let actual_output =
-                    calculate_output(liquidity, current_sqrt_price, new_sqrt_price, is_sell);
-                amount_out = amount_out + actual_output;
+
+                let (new_amount_a, new_amount_b) = calculate_amounts(
+                    liquidity,
+                    new_sqrt_price,
+                    lower_sqrt_price,
+                    upper_sqrt_price,
+                );
+
+                // since we are selling token_a the amount_out is in b.
+                let actual_output = if is_sell {
+                    amount_b_in_range - new_amount_b
+                } else {
+                    amount_a_in_range - new_amount_a
+                };
+
+                amount_out += actual_output;
                 current_sqrt_price = new_sqrt_price;
+
                 break;
             } else {
-                let actual_output =
-                    calculate_output(liquidity, current_sqrt_price, sqrt_price_target, is_sell);
-                amount_out = amount_out + actual_output;
-                remaining_amount = remaining_amount - max_in;
+                remaining_amount -= max_in;
+
                 if is_sell {
                     current_tick -= self.tick_spacing;
+                    current_sqrt_price = lower_sqrt_price;
+
+                    amount_out += amount_b_in_range;
                 } else {
                     current_tick += self.tick_spacing;
+                    current_sqrt_price = upper_sqrt_price;
+
+                    amount_out += amount_a_in_range;
                 }
-                current_sqrt_price = sqrt_price_target;
             }
         }
 
