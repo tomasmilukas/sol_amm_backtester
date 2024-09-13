@@ -15,15 +15,16 @@ pub fn tick_to_sqrt_price_u256(tick: i32) -> U256 {
     U256::from(sqrt_price as u128)
 }
 
-pub fn sqrt_price_to_u256(sqrt_price: f64) -> U256 {
-    let scaled_sqrt_price = (sqrt_price * Q64.as_u128() as f64) as u128;
-    U256::from(scaled_sqrt_price)
-}
+// WORKS GREAT. DO NOT TOUCH. ACCURATE. TESTED AGAINST LIVE SWAPS.
+pub fn price_to_tick(price: f64, decimal_diff: i16) -> i32 {
+    // Step 1: Convert price to sqrtPrice
+    let sqrt_price = (price / 10_f64.powf(decimal_diff as f64)).sqrt();
 
-pub fn sqrt_price_to_tick(sqrt_price: f64) -> i32 {
-    ((sqrt_price.ln() / 1.0001f64.ln()) * 2.0).floor() as i32
-}
+    let numerator = sqrt_price.ln();
+    let denominator = 1.0001f64.ln();
 
+    (2.0 * numerator / denominator).floor() as i32
+}
 // THIS FUNCTION WORKS. TESTED AGAINST LIVE POSITIONS.
 pub fn calculate_liquidity(
     amount_a: U256,
@@ -121,7 +122,9 @@ pub fn calculate_new_sqrt_price(
         */
         let numerator = current_sqrt_price.checked_mul(liquidity).unwrap();
         let product = amount_in.checked_mul(current_sqrt_price).unwrap();
-        let denominator = liquidity.checked_add(product.checked_div(Q64).unwrap()).unwrap();
+        let denominator = liquidity
+            .checked_add(product.checked_div(Q64).unwrap())
+            .unwrap();
         numerator.checked_div(denominator).unwrap()
     } else {
         /*
@@ -137,7 +140,11 @@ pub fn calculate_new_sqrt_price(
 
         sqrt(P_new) = sqrt(P) + (Δy / L)
         */
-        let increment = amount_in.checked_mul(Q64).unwrap().checked_div(liquidity).unwrap();
+        let increment = amount_in
+            .checked_mul(Q64)
+            .unwrap()
+            .checked_div(liquidity)
+            .unwrap();
         current_sqrt_price.checked_add(increment).unwrap()
     }
 }
@@ -169,6 +176,11 @@ pub fn calculate_rebalance_amount(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sqrt_price_to_u256(sqrt_price: f64) -> U256 {
+        let scaled_sqrt_price = (sqrt_price * Q64.as_u128() as f64) as u128;
+        U256::from(scaled_sqrt_price)
+    }
 
     fn calculate_relative_error(expected: U256, actual: U256) -> f64 {
         let diff = if expected > actual {
@@ -216,6 +228,18 @@ mod tests {
             error,
             acceptable_error
         );
+    }
+
+    #[test]
+    fn test_sqrt_price_to_tick() {
+        // SOL_USDC
+        assert_eq!(price_to_tick(133.446536f64, 3), -20142);
+
+        // SOL/POPCAT
+        assert_eq!(price_to_tick(206.071016394f64, 0), 53284);
+
+        // SOL/WIF
+        assert_eq!(price_to_tick(86.719236f64, 3), -24453);
     }
 
     #[test]
