@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use super::liquidity_array::{LiquidityArray, OwnersPosition, TickData};
+use super::liquidity_array::{LiquidityArray, OwnersPosition};
 
 pub struct StartInfo {
     pub token_a_amount: U256,
