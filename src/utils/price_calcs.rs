@@ -499,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn test_random() {
+    fn test_to_show_how_dynamic_liquidity_is() {
         let (amount_a, _) = calculate_amounts(
             U256::from(9913435703877_u128),
             tick_to_sqrt_price_u256(-21000),
@@ -542,8 +542,6 @@ mod tests {
             tick_to_sqrt_price_u256(upper_tick),
         );
 
-        println!("LIQ 1: {}", liquidity);
-
         let starting_tick = -16000;
         let lower_tick = -20000;
         let upper_tick = -17000;
@@ -558,8 +556,6 @@ mod tests {
             tick_to_sqrt_price_u256(upper_tick),
         );
 
-        println!("LIQ 2: {}", liquidity);
-
         let starting_tick = -21000;
         let lower_tick = -20000;
         let upper_tick = -17000;
@@ -573,7 +569,5 @@ mod tests {
             tick_to_sqrt_price_u256(lower_tick),
             tick_to_sqrt_price_u256(upper_tick),
         );
-
-        println!("LIQ 3: {}", liquidity);
     }
 }
