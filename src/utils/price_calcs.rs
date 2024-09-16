@@ -6,8 +6,8 @@ construct_uint! {
     pub struct U256(4);
 }
 
-// pub const Q32: U256 = U256([1u128 << 64, 0, 0, 0]);
 pub const Q64: U256 = U256([0, 1, 0, 0]);
+pub const Q128: U256 = U256([0, 0, 1, 0]);
 
 // WORKS WITHIN A REASONABLE LIMIT. TESTED AGAINST LIVE STUFF.
 pub fn tick_to_sqrt_price_u256(tick: i32) -> U256 {
@@ -75,7 +75,7 @@ pub fn calculate_amounts(
     if current_sqrt_price_fixed <= lower_sqrt_price_fixed {
         // Price is at or below the lower bound
         // All liquidity is in token A
-        let amount_a = liquidity * (upper_sqrt_price_fixed - lower_sqrt_price_fixed) * Q64
+        let amount_a = (liquidity * (upper_sqrt_price_fixed - lower_sqrt_price_fixed) * Q64)
             / (lower_sqrt_price_fixed * upper_sqrt_price_fixed);
         (amount_a, U256::zero())
     } else if current_sqrt_price_fixed >= upper_sqrt_price_fixed {
@@ -496,5 +496,84 @@ mod tests {
             calculate_relative_error(U256::from(9913435703877_u128), liquidity),
             1e-2
         );
+    }
+
+    #[test]
+    fn test_random() {
+        let (amount_a, _) = calculate_amounts(
+            U256::from(9913435703877_u128),
+            tick_to_sqrt_price_u256(-21000),
+            tick_to_sqrt_price_u256(-20164),
+            tick_to_sqrt_price_u256(-16096),
+        );
+
+        assert_eq!(
+            U256::from(4999),
+            U256::from(amount_a / 10_i32.pow(9)),
+            "amount_a match when below lower range"
+        );
+
+        let (_, amount_b) = calculate_amounts(
+            U256::from(9913435703877_u128),
+            tick_to_sqrt_price_u256(-15000),
+            tick_to_sqrt_price_u256(-20164),
+            tick_to_sqrt_price_u256(-16096),
+        );
+
+        assert_eq!(
+            U256::from(815893),
+            U256::from(amount_b / 10_i32.pow(6)),
+            "amount_a match when below lower range"
+        );
+
+        //2nd example.
+
+        let starting_tick = -19969;
+        let lower_tick = -20000;
+        let upper_tick = -17000;
+
+        let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
+
+        let liquidity = calculate_liquidity(
+            U256::from(500 * 10_u128.pow(9)),
+            U256::from(67884 * 10_u128.pow(6)),
+            starting_sqrt_price_u256,
+            tick_to_sqrt_price_u256(lower_tick),
+            tick_to_sqrt_price_u256(upper_tick),
+        );
+
+        println!("LIQ 1: {}", liquidity);
+
+        let starting_tick = -16000;
+        let lower_tick = -20000;
+        let upper_tick = -17000;
+
+        let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
+
+        let liquidity = calculate_liquidity(
+            U256::from(500 * 10_u128.pow(9)),
+            U256::from(67884 * 10_u128.pow(6)),
+            starting_sqrt_price_u256,
+            tick_to_sqrt_price_u256(lower_tick),
+            tick_to_sqrt_price_u256(upper_tick),
+        );
+
+        println!("LIQ 2: {}", liquidity);
+
+        let starting_tick = -21000;
+        let lower_tick = -20000;
+        let upper_tick = -17000;
+
+        let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
+
+        let liquidity = calculate_liquidity(
+            U256::from(500 * 10_u128.pow(9)),
+            U256::from(67884 * 10_u128.pow(6)),
+            starting_sqrt_price_u256,
+            tick_to_sqrt_price_u256(lower_tick),
+            tick_to_sqrt_price_u256(upper_tick),
+        );
+
+        println!("LIQ 3: {}", liquidity);
     }
 }
