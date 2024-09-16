@@ -1,11 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use uint::construct_uint;
-
-construct_uint! {
-    pub struct U256(4);
-}
+use super::price_calcs::U256;
 
 #[derive(Debug)]
 pub struct PriceCalcError(pub String);
@@ -64,6 +60,7 @@ pub enum BacktestError {
         token: String,
     },
     InvalidLiquidity,
+    InitializedTickNotFound,
     PriceCalculationError(String),
     PositionNotFound(String),
     StrategyError(String),
@@ -92,6 +89,7 @@ impl fmt::Display for BacktestError {
             BacktestError::PositionNotFound(id) => write!(f, "Position not found: {}", id),
             BacktestError::StrategyError(msg) => write!(f, "Strategy error: {}", msg),
             BacktestError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            BacktestError::InitializedTickNotFound => write!(f, "Initialized tick not found."),
             BacktestError::Other(msg) => write!(f, "Unknown error: {}", msg),
         }
     }
@@ -102,6 +100,7 @@ impl Error for BacktestError {}
 #[derive(Debug)]
 pub enum LiquidityArrayError {
     PositionNotFound(String),
+    InitializedTickNotFound,
     InsufficientLiquidity,
     PriceCalculation(PriceCalcError),
 }
@@ -112,6 +111,9 @@ impl fmt::Display for LiquidityArrayError {
             LiquidityArrayError::PositionNotFound(id) => write!(f, "Position not found: {}", id),
             LiquidityArrayError::InsufficientLiquidity => write!(f, "Insufficient liquidity"),
             LiquidityArrayError::PriceCalculation(err) => write!(f, "{}", err),
+            LiquidityArrayError::InitializedTickNotFound => {
+                write!(f, "Initialized tick not found")
+            }
         }
     }
 }
@@ -126,6 +128,7 @@ impl From<LiquidityArrayError> for BacktestError {
             LiquidityArrayError::PriceCalculation(err) => {
                 BacktestError::PriceCalculationError(err.to_string())
             }
+            LiquidityArrayError::InitializedTickNotFound => BacktestError::InitializedTickNotFound,
         }
     }
 }
