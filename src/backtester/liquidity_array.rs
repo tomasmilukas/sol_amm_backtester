@@ -3,7 +3,7 @@ use std::{collections::HashMap, thread, time::Duration};
 use crate::utils::{
     error::LiquidityArrayError,
     price_calcs::{
-        calculate_amounts, calculate_new_sqrt_price, tick_to_sqrt_price_u256, Q128, Q64, U256,
+        calculate_amounts, calculate_new_sqrt_price, tick_to_sqrt_price_u256, Q128, U256,
     },
 };
 
@@ -48,7 +48,7 @@ pub struct OwnersPosition {
 // Each index contains the TickData where u have tick, fee growth, net liquidity.
 impl LiquidityArray {
     pub fn new(min_tick: i32, max_tick: i32, tick_spacing: i32, fee_rate: i16) -> Self {
-        let size = (max_tick - min_tick) as usize;
+        let size = ((max_tick - min_tick) as usize) + 1; // +1 due to arr nature
         let mut data = Vec::with_capacity(size);
         let mut current_tick = min_tick;
 
@@ -65,7 +65,7 @@ impl LiquidityArray {
         }
 
         LiquidityArray {
-            data: Vec::new(),
+            data,
             positions: HashMap::new(),
             min_tick,
             fee_rate,
@@ -86,30 +86,68 @@ impl LiquidityArray {
     pub fn get_next_initialized_tick(
         &self,
         tick: i32,
-        cross_up: bool,
+        direction_up: bool,
     ) -> Result<TickData, LiquidityArrayError> {
         // the current_tick is used up so we need to +1/-1
-        let start_index = if cross_up {
+        let start_index = if direction_up {
             self.get_index(tick) + 1
         } else {
             self.get_index(tick) - 1
         };
 
-        let end_index = if cross_up { self.data.len() } else { 0 };
+        let end_index = if direction_up { self.data.len() } else { 0 };
 
-        let range = if cross_up {
-            start_index..end_index
+        if direction_up {
+            // range here goes from mid to upper end.
+            for i in start_index..end_index {
+                if self.data[i].is_initialized {
+                    return Ok(self.data[i]);
+                }
+            }
         } else {
-            0..start_index
-        };
-
-        for i in range {
-            if self.data[i].is_initialized {
-                return Ok(self.data[i]);
+            // range here goes from mid to lower end. reverse loop sinc we start from start index and go down.
+            for i in (0..start_index).rev() {
+                if self.data[i].is_initialized {
+                    return Ok(self.data[i]);
+                }
             }
         }
 
         Err(LiquidityArrayError::InitializedTickNotFound)
+    }
+
+    // TAKE NOTE, FIRST TICK DATA IS UPPER.
+    pub fn get_upper_and_lower_ticks(
+        &self,
+        current_tick: i32,
+        direction_up: bool,
+    ) -> Result<(TickData, TickData), LiquidityArrayError> {
+        let current_init_tick = self.data[self.get_index(current_tick)];
+
+        println!("CURR TICK: {:?} {}", current_init_tick, current_tick);
+
+        // curr_tick initialized
+        if current_init_tick.is_initialized {
+            // The logic here is that if current_tick is initialized, its either at the upper or lower bounds.
+            let upper_tick = if direction_up {
+                self.get_next_initialized_tick(current_tick, direction_up)?
+            } else {
+                current_init_tick
+            };
+
+            let lower_tick = if direction_up {
+                current_init_tick
+            } else {
+                self.get_next_initialized_tick(current_tick, direction_up)?
+            };
+
+            Ok((upper_tick, lower_tick))
+        } else {
+            Ok((
+                self.get_next_initialized_tick(current_tick, true)?,
+                self.get_next_initialized_tick(current_tick, false)?,
+            ))
+        }
     }
 
     // ALSO initializes/uninitializes ticks.
@@ -144,7 +182,8 @@ impl LiquidityArray {
                 self.data[lower_tick_index].net_liquidity != 0;
         }
 
-        let in_range = self.current_tick >= lower_tick && self.current_tick <= upper_tick;
+        // this range logic comes from here: https://github.com/Uniswap/v3-core/blob/main/contracts/UniswapV3Pool.sol#L328
+        let in_range = self.current_tick >= lower_tick && self.current_tick < upper_tick;
 
         if in_range && is_increase {
             // If in range, add it to active liquidity
@@ -264,15 +303,13 @@ impl LiquidityArray {
         let mut amount_out = U256::zero();
 
         while remaining_amount > U256::zero() {
-            thread::sleep(Duration::from_millis(8));
+            // thread::sleep(Duration::from_millis(8));
 
             let liquidity = self.active_liquidity;
 
-            // Used when selling
-            let lower_initialized_tick_data =
-                self.get_next_initialized_tick(current_tick, false)?;
-            // Used when buying
-            let upper_initialized_tick_data = self.get_next_initialized_tick(current_tick, true)?;
+            // is_sell == direction_down not up, thus reverse
+            let (upper_initialized_tick_data, lower_initialized_tick_data) =
+                self.get_upper_and_lower_ticks(current_tick, !is_sell)?;
 
             let lower_sqrt_price = tick_to_sqrt_price_u256(lower_initialized_tick_data.tick);
             let upper_sqrt_price = tick_to_sqrt_price_u256(upper_initialized_tick_data.tick);
@@ -285,25 +322,17 @@ impl LiquidityArray {
                     lower_sqrt_price,
                     current_sqrt_price,
                 );
+
                 amount_a_in_range
             } else {
                 let (_, amount_b_in_range) = calculate_amounts(
                     liquidity,
+                    upper_sqrt_price,
                     current_sqrt_price,
-                    lower_sqrt_price,
-                    current_sqrt_price,
+                    upper_sqrt_price,
                 );
                 amount_b_in_range
             };
-
-            println!(
-                "AMOUNTS: {} {} {} {}",
-                max_in, remaining_amount, liquidity, is_sell
-            );
-            println!(
-                "TICKS: {} {}",
-                lower_initialized_tick_data.tick, upper_initialized_tick_data.tick
-            );
 
             // Stay within the initialized range.
             if remaining_amount <= max_in {
@@ -330,9 +359,9 @@ impl LiquidityArray {
                 );
 
                 if is_sell {
-                    amount_out += new_amount_b - old_amount_b;
+                    amount_out += new_amount_b.abs_diff(old_amount_b);
                 } else {
-                    amount_out += old_amount_a - new_amount_a;
+                    amount_out += new_amount_a.abs_diff(old_amount_a);
                 }
 
                 current_sqrt_price = new_sqrt_price;
@@ -346,20 +375,25 @@ impl LiquidityArray {
 
                 break;
             } else {
-                // Cross the tick range and calculate new active liquidity and new fee_growth_outside
+                // Cross the tick range and calculate new active liquidity and new fee_growth_outside for upper or lower tick.
                 remaining_amount -= max_in;
 
-                let mut next_initialized_tick: TickData;
+                let mut relevant_tick: TickData;
+
+                // Calculate fee growth for this step
+                let fee_growth = (fee_amount * Q128) / liquidity;
 
                 if is_sell {
                     current_tick = lower_initialized_tick_data.tick;
                     current_sqrt_price = lower_sqrt_price;
+                    relevant_tick = lower_initialized_tick_data;
+
+                    // Update fee growth global
+                    self.fee_growth_global_a += fee_growth;
 
                     // fee growth
-                    next_initialized_tick = self.get_next_initialized_tick(current_tick, false)?;
-
-                    next_initialized_tick.fee_growth_outside_a =
-                        self.fee_growth_global_a - next_initialized_tick.fee_growth_outside_a;
+                    relevant_tick.fee_growth_outside_a =
+                        self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
 
                     // amount_out, since we swapping a we get b amount out.
                     let (_, amount_b) = calculate_amounts(
@@ -372,11 +406,13 @@ impl LiquidityArray {
                 } else {
                     current_tick = upper_initialized_tick_data.tick;
                     current_sqrt_price = upper_sqrt_price;
+                    relevant_tick = upper_initialized_tick_data;
 
-                    next_initialized_tick = self.get_next_initialized_tick(current_tick, true)?;
+                    // Update fee growth global
+                    self.fee_growth_global_b += fee_growth;
 
-                    next_initialized_tick.fee_growth_outside_b =
-                        self.fee_growth_global_b - next_initialized_tick.fee_growth_outside_b;
+                    relevant_tick.fee_growth_outside_b =
+                        self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
                     // amount_out, since we swapping b we get a amount out.
                     let (amount_a, _) = calculate_amounts(
@@ -389,19 +425,18 @@ impl LiquidityArray {
                 }
 
                 // Update active liquidity
-                let positive_net_liq = next_initialized_tick.net_liquidity > 0;
+                let positive_net_liq = relevant_tick.net_liquidity > 0;
 
                 if positive_net_liq {
-                    self.active_liquidity -= U256::from(next_initialized_tick.net_liquidity as u128)
+                    self.active_liquidity -= U256::from(relevant_tick.net_liquidity as u128)
                 } else {
                     // we are manually canceling out two minuses
-                    self.active_liquidity +=
-                        U256::from(next_initialized_tick.net_liquidity.unsigned_abs())
+                    self.active_liquidity += U256::from(relevant_tick.net_liquidity.unsigned_abs())
                 }
 
                 // Update initialized tick
-                let index = self.get_index(current_tick);
-                self.data[index] = next_initialized_tick;
+                let index = self.get_index(relevant_tick.tick);
+                self.data[index] = relevant_tick;
             }
         }
 
@@ -411,204 +446,141 @@ impl LiquidityArray {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     fn setup_liquidity_array() -> LiquidityArray {
-//         let mut array = LiquidityArray::new(-20, 20, 2, 300);
-//         array.current_tick = 4;
-//         array.current_sqrt_price = tick_to_sqrt_price_u256(array.current_tick);
-//         array.update_liquidity(TickData {
-//             lower_tick: -10,
-//             upper_tick: 10,
-//             liquidity: U256::from(1_000_000_000_000_u128),
-//         });
-//         array
-//     }
+    fn setup_liquidity_array(current_tick: i32) -> LiquidityArray {
+        let mut array = LiquidityArray::new(-20, 20, 2, 300);
+        array.current_tick = current_tick;
+        array.current_sqrt_price = tick_to_sqrt_price_u256(array.current_tick);
+        array.update_liquidity(-8, 8, 4_000_000_000_i128, true);
+        array.update_liquidity(0, 4, 2_000_000_000_i128, true);
+        array.update_liquidity(-4, 2, 2_000_000_000_i128, true);
 
-//     #[test]
-//     fn test_simulate_swap_sell_direction() {
-//         let mut array = setup_liquidity_array();
-//         let starting_price = array.current_sqrt_price;
+        array
+    }
 
-//         let result = array
-//             .simulate_swap(U256::from(6 * 10_i32.pow(6) as u128), true)
-//             .unwrap();
+    #[test]
+    fn test_get_upper_and_lower_ticks() {
+        let current_tick = 2;
+        let array = setup_liquidity_array(current_tick);
 
-//         assert!(
-//             result.0 == 4 && result.1 == 4,
-//             "Swap should not have moved range at all. Starting tick and ending tick here."
-//         );
-//         assert!(
-//             array.current_sqrt_price < starting_price,
-//             "Price should decrease for a sell"
-//         );
+        // since current tick == upper tick the upper should be 2 and lower 0. direction down.
+        let (upper_tick, lower_tick) = array
+            .get_upper_and_lower_ticks(current_tick, false)
+            .unwrap();
 
-//         let result = array
-//             .simulate_swap(U256::from(6 * 10_i32.pow(6) as u128), true)
-//             .unwrap();
+        assert!(
+            upper_tick.tick == current_tick,
+            "Upper tick should equal to current tick"
+        );
+        assert!(
+            lower_tick.tick == 0,
+            "Lower tick should equal to next lower init tick"
+        );
 
-//         assert!(
-//             result.0 == 4 && result.1 == 2,
-//             "Swap should have moved range to 0-2. By 1 tick spacing."
-//         );
-//         assert!(
-//             array.current_sqrt_price < tick_to_sqrt_price_u256(array.current_tick),
-//             "Price should decrease slightly below tick 2."
-//         );
-//     }
+        let current_tick = -4;
+        let array = setup_liquidity_array(current_tick);
+        let (upper_tick, lower_tick) = array.get_upper_and_lower_ticks(current_tick, true).unwrap();
 
-//     #[test]
-//     fn test_simulate_swap_buy_direction() {
-//         let mut array = setup_liquidity_array();
-//         let starting_price = array.current_sqrt_price;
+        assert!(
+            upper_tick.tick == 0,
+            "Upper tick should equal to next upper tick"
+        );
+        assert!(
+            lower_tick.tick == current_tick,
+            "Lower tick should equal to current tick"
+        );
 
-//         let result = array
-//             .simulate_swap(U256::from(6 * 10_i32.pow(6) as u128), false)
-//             .unwrap();
+        // between both so should get 2 new ticks.
+        let current_tick = -2;
+        let array = setup_liquidity_array(current_tick);
+        let (upper_tick, lower_tick) = array.get_upper_and_lower_ticks(current_tick, true).unwrap();
 
-//         assert!(
-//             result.0 == 4 && result.1 == 4,
-//             "Swap should not have moved range at all. Starting tick and ending tick here."
-//         );
-//         assert!(
-//             array.current_sqrt_price > starting_price,
-//             "Price should increase for a sell"
-//         );
+        assert!(upper_tick.tick == 0, "Upper tick should be new");
+        assert!(lower_tick.tick == -4, "Lower tick should be new");
+    }
 
-//         // SWAP AGAIN. TICKS AND STUFF NEEDS TO MOVE.
-//         let result = array
-//             .simulate_swap(U256::from(6 * 10_i32.pow(6) as u128), false)
-//             .unwrap();
+    #[test]
+    fn test_simulate_swap_sell_direction() {
+        let current_tick = 0;
+        let mut array = setup_liquidity_array(current_tick);
+        let starting_price = array.current_sqrt_price;
 
-//         assert!(
-//             result.0 == 4 && result.1 == 6,
-//             "Swap should have moved range to 4-6. By 1 tick spacing."
-//         );
-//         assert!(
-//             array.current_sqrt_price > tick_to_sqrt_price_u256(array.current_tick),
-//             "Price should decrease slightly above tick 4."
-//         );
-//     }
+        array
+            .simulate_swap(U256::from(2 * 10_i32.pow(6) as u128), true)
+            .unwrap();
 
-//     #[test]
-//     fn test_simulate_swap_with_fees_sell() {
-//         let mut array = setup_liquidity_array();
-//         let amount_in = U256::from(1_000_u128);
+        assert!(
+            array.current_tick == -4,
+            "Swap should have moved current tick."
+        );
+        assert!(
+            array.current_sqrt_price < starting_price,
+            "Price should decrease for a sell"
+        );
+    }
 
-//         // Add a test position
-//         array.add_owners_position(
-//             OwnersPosition {
-//                 owner: "Alice".to_string(),
-//                 lower_tick: -10,
-//                 upper_tick: 10,
-//                 liquidity: U256::from(1_000_000),
-//                 fees_owed_a: U256::zero(),
-//                 fees_owed_b: U256::zero(),
-//             },
-//             String::from("Alice_-10_10_1000000"),
-//         );
+    #[test]
+    fn test_simulate_swap_buy_direction() {
+        let current_tick = 2;
+        let mut array = setup_liquidity_array(current_tick);
+        let starting_price = array.current_sqrt_price;
 
-//         let (start_tick, end_tick, _amount_out, fees) =
-//             array.simulate_swap_with_fees(amount_in, true).unwrap();
+        array
+            .simulate_swap(U256::from(2 * 10_i32.pow(6) as u128), false)
+            .unwrap();
 
-//         assert_eq!(fees, U256::from(30), "3% of 100 should be 30");
+        assert!(array.current_tick == 4, "Swap should move tick");
+        assert!(
+            array.current_sqrt_price > starting_price,
+            "Price should increase for a sell"
+        );
+    }
 
-//         // Check if fees were accrued correctly
-//         let position = array.positions.get("Alice_-10_10_1000000").unwrap();
-//         assert_eq!(
-//             position.fees_owed_a,
-//             U256::from(4980615919000000_u128),
-//             "All fees should be accrued to token A for a sell"
-//         );
-//         assert_eq!(
-//             position.fees_owed_b,
-//             U256::zero(),
-//             "No fees should be accrued to token B for a sell"
-//         );
-//     }
+    #[test]
+    fn test_collect_fees() {
+        let mut array = setup_liquidity_array();
 
-//     #[test]
-//     fn test_simulate_swap_with_fees_buy() {
-//         let mut array = setup_liquidity_array();
-//         let amount_in = U256::from(200_u128);
+        // Add a test position with pre-existing fees
+        array.add_owners_position(
+            OwnersPosition {
+                owner: "Charlie".to_string(),
+                lower_tick: -10,
+                upper_tick: 10,
+                liquidity: U256::from(1_000_000_000_000_u128),
+                fees_owed_a: U256::from(50_000) * Q64,
+                fees_owed_b: U256::from(75_000) * Q64,
+            },
+            String::from("Charlie_-10_10_1000000000000"),
+        );
 
-//         // Add a test position
-//         array.add_owners_position(
-//             OwnersPosition {
-//                 owner: "Bob".to_string(),
-//                 lower_tick: -10,
-//                 upper_tick: 10,
-//                 liquidity: U256::from(1_000_000_u128),
-//                 fees_owed_a: U256::zero(),
-//                 fees_owed_b: U256::zero(),
-//             },
-//             String::from("Bob_-10_10_1000000"),
-//         );
+        let position_id = "Charlie_-10_10_1000000000000";
+        let (collected_fees_a, collected_fees_b) = array.collect_fees(position_id).unwrap();
 
-//         let (start_tick, end_tick, _amount_out, fees) =
-//             array.simulate_swap_with_fees(amount_in, false).unwrap();
+        assert_eq!(
+            collected_fees_a,
+            U256::from(50_000),
+            "Should collect all of token A fees"
+        );
+        assert_eq!(
+            collected_fees_b,
+            U256::from(75_000),
+            "Should collect all of token B fees"
+        );
 
-//         assert_eq!(fees, U256::from(6), "3% of 200 should be 6");
-
-//         let position = array.positions.get("Bob_-10_10_1000000").unwrap();
-
-//         // TAKE INTO ACCOUNT THESE FEES ARE MULTIPLIED BY Q32 for precision. U can see in collect_fees it is divided to remove it.
-//         assert_eq!(
-//             position.fees_owed_b,
-//             U256::from(996123183000000_u128),
-//             "All fees should be accrued to token B for a buy"
-//         );
-//         assert_eq!(
-//             position.fees_owed_a,
-//             U256::from(0),
-//             "No fees should be accrued to token A for a buy"
-//         );
-//     }
-
-//     #[test]
-//     fn test_collect_fees() {
-//         let mut array = setup_liquidity_array();
-
-//         // Add a test position with pre-existing fees
-//         array.add_owners_position(
-//             OwnersPosition {
-//                 owner: "Charlie".to_string(),
-//                 lower_tick: -10,
-//                 upper_tick: 10,
-//                 liquidity: U256::from(1_000_000_000_000_u128),
-//                 fees_owed_a: U256::from(50_000) * Q64,
-//                 fees_owed_b: U256::from(75_000) * Q64,
-//             },
-//             String::from("Charlie_-10_10_1000000000000"),
-//         );
-
-//         let position_id = "Charlie_-10_10_1000000000000";
-//         let (collected_fees_a, collected_fees_b) = array.collect_fees(position_id).unwrap();
-
-//         assert_eq!(
-//             collected_fees_a,
-//             U256::from(50_000),
-//             "Should collect all of token A fees"
-//         );
-//         assert_eq!(
-//             collected_fees_b,
-//             U256::from(75_000),
-//             "Should collect all of token B fees"
-//         );
-
-//         // Check if fees were reset after collection
-//         let position = array.positions.get(position_id).unwrap();
-//         assert_eq!(
-//             position.fees_owed_a,
-//             U256::zero(),
-//             "Token A fees should be reset to 0 after collection"
-//         );
-//         assert_eq!(
-//             position.fees_owed_b,
-//             U256::zero(),
-//             "Token B fees should be reset to 0 after collection"
-//         );
-//     }
-// }
+        // Check if fees were reset after collection
+        let position = array.positions.get(position_id).unwrap();
+        assert_eq!(
+            position.fees_owed_a,
+            U256::zero(),
+            "Token A fees should be reset to 0 after collection"
+        );
+        assert_eq!(
+            position.fees_owed_b,
+            U256::zero(),
+            "Token B fees should be reset to 0 after collection"
+        );
+    }
+}
