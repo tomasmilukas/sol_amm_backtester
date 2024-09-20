@@ -271,6 +271,8 @@ impl Backtest {
                         lower_tick: new_lower_tick,
                         upper_tick: new_upper_tick,
                         liquidity: new_liquidity.as_u128() as i128,
+                        fee_growth_inside_a_last: U256::zero(),
+                        fee_growth_inside_b_last: U256::zero(),
                     },
                     position_id.clone(),
                 );
@@ -319,6 +321,8 @@ impl Backtest {
                             tick_to_sqrt_price_u256(upper_tick),
                         )
                         .as_u128() as i128,
+                        fee_growth_inside_a_last: U256::zero(),
+                        fee_growth_inside_b_last: U256::zero(),
                     },
                     position_id,
                 );
