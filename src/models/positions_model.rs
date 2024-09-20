@@ -12,7 +12,6 @@ pub struct PositionModel {
     pub tick_lower: i32,
     pub tick_upper: i32,
     pub created_at: DateTime<Utc>,
-    pub last_updated_at: DateTime<Utc>,
 }
 
 // Below is for decoding.
@@ -46,7 +45,6 @@ impl PositionModel {
             tick_lower,
             tick_upper,
             created_at: chrono::Utc::now(),
-            last_updated_at: chrono::Utc::now(),
         }
     }
 }

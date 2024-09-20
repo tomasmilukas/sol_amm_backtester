@@ -42,17 +42,16 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     transaction_repo: &T,
     mut liquidity_array: LiquidityArray,
     pool_model: PoolModel,
-    latest_transaction: Option<TransactionModelFromDB>,
+    latest_transaction: TransactionModelFromDB,
     batch_size: i64,
 ) -> Result<(LiquidityArray, i64), SyncError> {
     // Initialize the cursor with the latest tx_id
-    let mut cursor = latest_transaction.clone().map(|tx| tx.tx_id);
+    let mut cursor = Some(latest_transaction.tx_id);
 
     // Initialize lowest_tx_id with the maximum possible i64 value
     let mut lowest_tx_id = i64::MAX;
 
     let swap_data = latest_transaction
-        .unwrap()
         .data
         .to_swap_data()
         .map_err(|e| SyncError::DatabaseError(e.to_string()))?
@@ -222,7 +221,6 @@ mod tests {
             token_a_decimals: 9,
             token_b_decimals: 6,
             tick_spacing: 1,
-            total_liquidity: Some("".to_string()),
             fee_rate: 300, // 0.03%
             last_updated_at: Utc::now(),
         };
@@ -273,7 +271,7 @@ mod tests {
             &mock_repo_1,
             initial_liquidity_array,
             pool_model.clone(),
-            Some(TransactionModelFromDB {
+            TransactionModelFromDB {
                 tx_id: 1,
                 signature: "sig1".to_string(),
                 pool_address: "pool1".to_string(),
@@ -288,7 +286,7 @@ mod tests {
                     amount_in: 5.301077056,
                     amount_out: 718.793826,
                 }),
-            }),
+            },
             10,
         )
         .await;
@@ -329,7 +327,7 @@ mod tests {
             &mock_repo_2,
             final_liquidity_array,
             pool_model,
-            Some(TransactionModelFromDB {
+            TransactionModelFromDB {
                 tx_id: 1,
                 signature: "sig1".to_string(),
                 pool_address: "pool1".to_string(),
@@ -344,7 +342,7 @@ mod tests {
                     amount_in: 135.904,
                     amount_out: 1.0,
                 }),
-            }),
+            },
             10,
         )
         .await;

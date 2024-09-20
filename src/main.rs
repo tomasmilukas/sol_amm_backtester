@@ -185,16 +185,20 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     let positions_api = PositionsApi::new()?;
     let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
 
-    let positions_data = positions_service
-        .get_position_data(&config.pool_address)
-        .await?;
-
     let tx_repo = TransactionRepo::new(pool);
 
     let latest_transaction = tx_repo
         .fetch_highest_tx_swap(&pool_data.address)
         .await
         .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+
+    let (positions_data, tx_to_sync_from) = positions_service
+        .get_position_data_for_transaction(
+            tx_repo.clone(),
+            &config.pool_address,
+            latest_transaction.clone().unwrap().block_time_utc,
+        )
+        .await?;
 
     // Create the liquidity range "at present" from db.
     let liquidity_range_arr =
@@ -205,7 +209,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         &tx_repo,
         liquidity_range_arr,
         pool_data.clone(),
-        latest_transaction.clone(),
+        tx_to_sync_from,
         10_000,
     )
     .await?;
