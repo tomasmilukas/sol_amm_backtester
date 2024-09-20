@@ -35,10 +35,23 @@ impl PositionsService {
             .await
             .context("Failed to start transaction")?;
 
+        // Get the latest version for the pool and increment it
+        let latest_version = self
+            .positions_repo
+            .get_latest_version_for_pool(pool_address)
+            .await
+            .context("Failed to get latest version for pool")?;
+        let new_version = latest_version + 1;
+
         // Upsert positions within the transaction
         for position in positions {
             self.positions_repo
-                .upsert_in_transaction(&mut transaction, pool_address, &position)
+                .upsert_in_transaction(
+                    &mut transaction,
+                    pool_address,
+                    &position,
+                    new_version,
+                )
                 .await
                 .with_context(|| format!("Failed to upsert position: {}", position.address))?;
         }
