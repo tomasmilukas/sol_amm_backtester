@@ -29,7 +29,7 @@ pub struct Whirlpool {
     pub fee_growth_global_b: u128,
 }
 
-#[derive(Debug, FromRow, Serialize, Deserialize)]
+#[derive(Debug, FromRow, Serialize, Deserialize, Clone)]
 pub struct PoolModel {
     pub address: String,
     pub name: String,
