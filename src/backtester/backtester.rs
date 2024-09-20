@@ -19,6 +19,7 @@ pub struct StartInfo {
     pub token_b_amount: U256,
 }
 
+#[derive(Debug, Clone)]
 pub struct Wallet {
     pub token_a_addr: String,
     pub token_b_addr: String,
@@ -88,18 +89,16 @@ pub trait Strategy {
 
 impl Backtest {
     pub fn new(
-        amount_a: U256,
-        amount_b: U256,
+        amount_a_start: U256,
+        amount_b_start: U256,
         liquidity_arr: LiquidityArray,
         wallet_state: Wallet,
         strategy: Box<dyn Strategy>,
     ) -> Self {
         Self {
             start_info: StartInfo {
-                token_a_amount: amount_a
-                    * U256::from(10u128.pow(wallet_state.token_a_decimals as u32)),
-                token_b_amount: amount_b
-                    * U256::from(10u128.pow(wallet_state.token_b_decimals as u32)),
+                token_a_amount: amount_a_start,
+                token_b_amount: amount_b_start,
             },
             liquidity_arr,
             wallet: wallet_state,
@@ -308,19 +307,21 @@ impl Backtest {
                     });
                 }
 
+                let liquidity = calculate_liquidity(
+                    amount_a,
+                    amount_b,
+                    self.liquidity_arr.current_sqrt_price,
+                    tick_to_sqrt_price_u256(lower_tick),
+                    tick_to_sqrt_price_u256(upper_tick),
+                );
+                println!("CALCULATED LIQ WHEN ADDING POSITION: {}", liquidity);
+
                 self.liquidity_arr.add_owners_position(
                     OwnersPosition {
                         owner: String::from(""),
                         lower_tick,
                         upper_tick,
-                        liquidity: calculate_liquidity(
-                            amount_a,
-                            amount_b,
-                            self.liquidity_arr.current_sqrt_price,
-                            tick_to_sqrt_price_u256(lower_tick),
-                            tick_to_sqrt_price_u256(upper_tick),
-                        )
-                        .as_u128() as i128,
+                        liquidity: liquidity.as_u128() as i128,
                         fee_growth_inside_a_last: U256::zero(),
                         fee_growth_inside_b_last: U256::zero(),
                     },
@@ -341,12 +342,10 @@ impl Backtest {
 
                 self.wallet.amount_a_fees_collected += fees_a;
                 self.wallet.amount_b_fees_collected += fees_b;
+
                 println!(
-                    "PRE CALC AMOUNTS: {} {} {} {}",
-                    position.liquidity,
-                    position.lower_tick,
-                    position.upper_tick,
-                    self.liquidity_arr.current_tick
+                    "RANDOM INFO INSIDE FINALIZE STRAT: {} {} {:?}",
+                    fees_a, fees_b, position
                 );
 
                 let (amount_a, amount_b) = calculate_amounts(
@@ -356,47 +355,60 @@ impl Backtest {
                     tick_to_sqrt_price_u256(position.upper_tick),
                 );
 
-                println!("POST CALC AMOUNTS: {} {}", amount_a, amount_b,);
+                println!(
+                    "AMOUNTS INFO INSIDE FINALIZE STRAT: {} {} {} {}",
+                    amount_a,
+                    amount_b,
+                    self.start_info.token_a_amount,
+                    self.start_info.token_b_amount
+                );
 
-                self.wallet.amount_token_a = amount_a;
-                self.wallet.amount_token_b = amount_b;
+                self.wallet.amount_token_a += amount_a;
+                self.wallet.amount_token_b += amount_b;
 
-                // // Calculate initial value in terms of token A
-                // let initial_price = (starting_sqrt_price * starting_sqrt_price) / Q64;
-                // // mul by Q64 to scale it back up.
-                // let initial_value_a = self.start_info.token_a_amount
-                //     + (self.start_info.token_b_amount * Q64) / initial_price;
+                // Calculate initial value in terms of token A
+                let initial_price = (starting_sqrt_price * starting_sqrt_price) / Q64;
+                let initial_value_a = self.start_info.token_a_amount
+                    + (self.start_info.token_b_amount * Q64) / initial_price;
 
-                // // Calculate the final value in terms of token A
-                // let current_price = self.liquidity_arr.current_sqrt_price
-                //     * self.liquidity_arr.current_sqrt_price
-                //     / Q64;
+                // Calculate the final value in terms of token A
+                let current_price = (self.liquidity_arr.current_sqrt_price
+                    * self.liquidity_arr.current_sqrt_price)
+                    / Q64;
+                let final_value_a = (self.wallet.amount_token_a
+                    + self.wallet.amount_a_fees_collected)
+                    + ((self.wallet.amount_token_b + self.wallet.amount_b_fees_collected) * Q64)
+                        / current_price;
 
-                // let final_value_a = (self.wallet.amount_token_a
-                //     + self.wallet.amount_a_fees_collected)
-                //     * Q64
-                //     + ((self.wallet.amount_token_b + self.wallet.amount_b_fees_collected) * Q64)
-                //         / current_price;
+                // Calculate profit
+                let profit = final_value_a.saturating_sub(initial_value_a);
+                let loss = initial_value_a.saturating_sub(final_value_a);
 
-                // // Calculate profit
-                // let is_negative = initial_value_a > final_value_a;
-                // let profit = if is_negative {
-                //     initial_value_a.checked_sub(final_value_a).unwrap()
-                // } else {
-                //     final_value_a.checked_sub(initial_value_a).unwrap()
-                // };
+                // Determine if it's a profit or loss
+                let is_profit = final_value_a > initial_value_a;
 
-                // // Store profit as a floating-point number
-                // self.wallet.total_profit = if is_negative {
-                //     -((profit.as_u128() as f64) / (Q64.as_u128() as f64))
-                // } else {
-                //     (profit.as_u128() as f64) / (Q64.as_u128() as f64)
-                // };
+                // Calculate profit or loss as a float
+                let profit_or_loss = if is_profit {
+                    profit.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32)
+                } else {
+                    -(loss.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32))
+                };
 
-                // // Calculate profit percentage
-                // self.wallet.total_profit_pct = (self.wallet.total_profit
-                //     / (initial_value_a.as_u128() as f64 / Q64.as_u128() as f64))
-                //     * 100.0;
+                // Calculate percentage
+                let profit_percentage = (profit_or_loss
+                    / (initial_value_a.as_u128() as f64
+                        / 10f64.powi(self.wallet.token_a_decimals as i32)))
+                    * 100.0;
+
+                // Store results
+                self.wallet.total_profit = profit_or_loss;
+                self.wallet.total_profit_pct = profit_percentage;
+
+                println!("Strategy finalized:");
+                println!("Initial value (in token A): {}", initial_value_a);
+                println!("Final value (in token A): {}", final_value_a);
+                println!("Total profit: {} token A", self.wallet.total_profit);
+                println!("Total profit percentage: {}%", self.wallet.total_profit_pct);
 
                 Ok(())
             }
@@ -404,395 +416,430 @@ impl Backtest {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use std::sync::Arc;
-//     use tokio::sync::Mutex;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
-//     struct MockStrategy;
+    struct MockStrategy;
 
-//     impl Strategy for MockStrategy {
-//         fn initialize_strategy(&self, _amount_a: U256, _amount_b: U256) -> Vec<Action> {
-//             vec![]
-//         }
+    impl Strategy for MockStrategy {
+        fn initialize_strategy(&self, _amount_a: U256, _amount_b: U256) -> Vec<Action> {
+            vec![]
+        }
 
-//         fn update(
-//             &mut self,
-//             _liquidity_array: &LiquidityArray,
-//             _transaction: TransactionModelFromDB,
-//         ) -> Vec<Action> {
-//             vec![]
-//         }
+        fn update(
+            &mut self,
+            _liquidity_array: &LiquidityArray,
+            _transaction: TransactionModelFromDB,
+        ) -> Vec<Action> {
+            vec![]
+        }
 
-//         fn finalize_strategy(&self, _starting_sqrt_price: U256) -> Vec<Action> {
-//             vec![]
-//         }
-//     }
+        fn finalize_strategy(&self, _starting_sqrt_price: U256) -> Vec<Action> {
+            vec![]
+        }
+    }
 
-//     struct MockTransactionRepo {
-//         transactions: Arc<Mutex<Vec<TransactionModelFromDB>>>,
-//     }
+    struct MockTransactionRepo {
+        transactions: Arc<Mutex<Vec<TransactionModelFromDB>>>,
+    }
 
-//     #[async_trait::async_trait]
-//     impl TransactionRepoTrait for MockTransactionRepo {
-//         async fn fetch_transactions(
-//             &self,
-//             _pool_address: &str,
-//             _cursor: Option<i64>,
-//             _batch_size: i64,
-//             _order: OrderDirection,
-//         ) -> Result<Vec<TransactionModelFromDB>, anyhow::Error> {
-//             Ok(self.transactions.lock().await.clone())
-//         }
+    #[async_trait::async_trait]
+    impl TransactionRepoTrait for MockTransactionRepo {
+        async fn fetch_transactions(
+            &self,
+            _pool_address: &str,
+            _cursor: Option<i64>,
+            _batch_size: i64,
+            _order: OrderDirection,
+        ) -> Result<Vec<TransactionModelFromDB>, anyhow::Error> {
+            Ok(self.transactions.lock().await.clone())
+        }
 
-//         async fn fetch_highest_tx_swap(
-//             &self,
-//             pool_address: &str,
-//         ) -> Result<Option<TransactionModelFromDB>> {
-//             Ok(None)
-//         }
-//     }
+        async fn fetch_highest_tx_swap(
+            &self,
+            pool_address: &str,
+        ) -> Result<Option<TransactionModelFromDB>> {
+            Ok(None)
+        }
+    }
 
-//     fn create_test_liquidity_array() -> LiquidityArray {
-//         let mut liq_arr = LiquidityArray::new(-500_000, 500_000, 10, 500);
-//         liq_arr.update_liquidity(TickData {
-//             lower_tick: -100,
-//             upper_tick: 100,
-//             liquidity: U256::from(1_000_000_000_u128),
-//         });
+    fn create_test_liquidity_array() -> LiquidityArray {
+        LiquidityArray::new(-500_000, 500_000, 10, 500)
+    }
 
-//         liq_arr
-//     }
+    #[tokio::test]
+    async fn test_backtest_initialization() {
+        let liquidity_arr = create_test_liquidity_array();
 
-//     #[tokio::test]
-//     async fn test_backtest_initialization() {
-//         let liquidity_arr = create_test_liquidity_array();
-//         let wallet = Wallet {
-//             token_a_addr: "TokenA".to_string(),
-//             token_b_addr: "TokenB".to_string(),
-//             amount_token_a: U256::from(1000_u128 * 10_u128.pow(6)),
-//             amount_token_b: U256::from(1000_u128 * 10_u128.pow(6)),
-//             token_a_decimals: 6,
-//             token_b_decimals: 6,
-//             amount_a_fees_collected: U256::zero(),
-//             amount_b_fees_collected: U256::zero(),
-//             total_profit: 0.0,
-//             total_profit_pct: 0.0,
-//         };
-//         let strategy = Box::new(MockStrategy);
+        let starting_token_a_amount = U256::from(1000_u128 * 10_u128.pow(6));
+        let starting_token_b_amount = U256::from(1000_u128 * 10_u128.pow(6));
 
-//         let backtest = Backtest::new(
-//             U256::from(1000),
-//             U256::from(1000),
-//             liquidity_arr,
-//             wallet,
-//             strategy,
-//         );
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: starting_token_a_amount,
+            amount_token_b: starting_token_b_amount,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: U256::zero(),
+            amount_b_fees_collected: U256::zero(),
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
 
-//         assert_eq!(
-//             backtest.start_info.token_a_amount,
-//             U256::from(1_000_000_000)
-//         );
-//         assert_eq!(
-//             backtest.start_info.token_b_amount,
-//             U256::from(1_000_000_000)
-//         );
-//     }
+        let backtest = Backtest::new(
+            starting_token_a_amount,
+            starting_token_b_amount,
+            liquidity_arr,
+            wallet,
+            strategy,
+        );
 
-//     #[tokio::test]
-//     async fn test_create_position() {
-//         let liquidity_arr = create_test_liquidity_array();
-//         let wallet = Wallet {
-//             token_a_addr: "TokenA".to_string(),
-//             token_b_addr: "TokenB".to_string(),
-//             amount_token_a: U256::from(1_000_000_000),
-//             amount_token_b: U256::from(1_000_000_000),
-//             token_a_decimals: 6,
-//             token_b_decimals: 6,
-//             amount_a_fees_collected: U256::zero(),
-//             amount_b_fees_collected: U256::zero(),
-//             total_profit: 0.0,
-//             total_profit_pct: 0.0,
-//         };
-//         let strategy = Box::new(MockStrategy);
+        assert_eq!(
+            backtest.start_info.token_a_amount,
+            U256::from(1_000_000_000)
+        );
+        assert_eq!(
+            backtest.start_info.token_b_amount,
+            U256::from(1_000_000_000)
+        );
+    }
 
-//         let mut backtest = Backtest::new(
-//             U256::from(1000),
-//             U256::from(1000),
-//             liquidity_arr,
-//             wallet,
-//             strategy,
-//         );
+    #[tokio::test]
+    async fn test_create_position() {
+        let liquidity_arr = create_test_liquidity_array();
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: U256::from(1_000_000_000),
+            amount_token_b: U256::from(1_000_000_000),
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: U256::zero(),
+            amount_b_fees_collected: U256::zero(),
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
 
-//         let action = Action::CreatePosition {
-//             position_id: "test_position".to_string(),
-//             lower_tick: 900,
-//             upper_tick: 1100,
-//             amount_a: U256::from(500_000_000_u128),
-//             amount_b: U256::from(500_000_000),
-//         };
+        let mut backtest = Backtest::new(
+            U256::from(1000),
+            U256::from(1000),
+            liquidity_arr,
+            wallet,
+            strategy,
+        );
 
-//         backtest.execute_action(action).unwrap();
+        let action = Action::CreatePosition {
+            position_id: "test_position".to_string(),
+            lower_tick: 900,
+            upper_tick: 1100,
+            amount_a: U256::from(500_000_000_u128),
+            amount_b: U256::from(500_000_000),
+        };
 
-//         assert_eq!(backtest.wallet.amount_token_a, U256::from(500_000_000));
-//         assert_eq!(backtest.wallet.amount_token_b, U256::from(500_000_000));
+        backtest.execute_action(action).unwrap();
 
-//         assert!(backtest
-//             .liquidity_arr
-//             .positions
-//             .contains_key("test_position"));
-//     }
+        assert_eq!(backtest.wallet.amount_token_a, U256::from(500_000_000));
+        assert_eq!(backtest.wallet.amount_token_b, U256::from(500_000_000));
 
-//     #[tokio::test]
-//     async fn test_finalize_strategy_in_range() {
-//         let mut liquidity_arr = create_test_liquidity_array();
-//         // Add a position to the liquidity array
-//         liquidity_arr.add_owners_position(
-//             OwnersPosition {
-//                 owner: "".to_string(),
-//                 lower_tick: -100,
-//                 upper_tick: 100,
-//                 liquidity: U256::from(1_000_000),
-//                 fees_owed_a: U256::zero(),
-//                 fees_owed_b: U256::zero(),
-//             },
-//             "test_position".to_string(),
-//         );
+        assert!(backtest
+            .liquidity_arr
+            .positions
+            .contains_key("test_position"));
+    }
 
-//         let wallet = Wallet {
-//             token_a_addr: "TokenA".to_string(),
-//             token_b_addr: "TokenB".to_string(),
-//             amount_token_a: U256::from(500_000_000),
-//             amount_token_b: U256::from(500_000_000),
-//             token_a_decimals: 6,
-//             token_b_decimals: 6,
-//             amount_a_fees_collected: U256::zero(),
-//             amount_b_fees_collected: U256::zero(),
-//             total_profit: 0.0,
-//             total_profit_pct: 0.0,
-//         };
-//         let strategy = Box::new(MockStrategy);
+    #[tokio::test]
+    async fn test_finalize_strategy_in_range() {
+        let starting_amount_a = U256::from(100 * 10_i32.pow(6));
+        let starting_amount_b = U256::from(100 * 10_i32.pow(6));
 
-//         let mut backtest = Backtest::new(
-//             U256::from(1000),
-//             U256::from(1000),
-//             liquidity_arr,
-//             wallet,
-//             strategy,
-//         );
+        let current_tick = 11;
+        let lower_tick = current_tick - 100;
+        let upper_tick = current_tick + 100;
 
-//         backtest.liquidity_arr.current_tick = 11;
-//         backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(11);
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: starting_amount_a,
+            amount_token_b: starting_amount_b,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: U256::zero(),
+            amount_b_fees_collected: U256::zero(),
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
 
-//         // Simulate some swaps to accumulate fees
-//         let swap_actions = vec![
-//             Action::Swap {
-//                 amount_in: U256::from(100),
-//                 is_sell: true,
-//             },
-//             Action::Swap {
-//                 amount_in: U256::from(150),
-//                 is_sell: false,
-//             },
-//             Action::Swap {
-//                 amount_in: U256::from(200),
-//                 is_sell: true,
-//             },
-//         ];
+        let mut backtest = Backtest::new(
+            starting_amount_a,
+            starting_amount_b,
+            create_test_liquidity_array(),
+            wallet,
+            strategy,
+        );
 
-//         for action in swap_actions {
-//             backtest.execute_action(action).unwrap();
-//         }
+        backtest.liquidity_arr.current_tick = current_tick;
+        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
 
-//         let action = Action::FinalizeStrategy {
-//             position_id: "test_position".to_string(),
-//             starting_sqrt_price: tick_to_sqrt_price_u256(10),
-//         };
+        // Simulate some swaps to accumulate fees
+        let all_actions = vec![
+            Action::CreatePosition {
+                position_id: "test_position".to_string(),
+                lower_tick,
+                upper_tick,
+                amount_a: starting_amount_a,
+                amount_b: starting_amount_b,
+            },
+            Action::Swap {
+                amount_in: U256::from(7_000_000),
+                is_sell: true,
+            },
+            Action::Swap {
+                amount_in: U256::from(10_000_000_i128),
+                is_sell: false,
+            },
+            Action::Swap {
+                amount_in: U256::from(3_000_000),
+                is_sell: true,
+            },
+            Action::FinalizeStrategy {
+                position_id: "test_position".to_string(),
+                starting_sqrt_price: tick_to_sqrt_price_u256(current_tick), // pass the starting tick
+            },
+        ];
 
-//         backtest.execute_action(action).unwrap();
+        for action in all_actions {
+            backtest.execute_action(action).unwrap();
+        }
 
-//         // Assertions
-//         assert!(
-//             backtest.wallet.amount_a_fees_collected > U256::zero(),
-//             "Should have collected some fees for token A"
-//         );
-//         assert!(
-//             backtest.wallet.amount_b_fees_collected > U256::zero(),
-//             "Should have collected some fees for token B"
-//         );
-//         assert!(
-//             backtest.wallet.total_profit != 0.0,
-//             "Total profit should not be zero"
-//         );
-//         assert!(
-//             backtest.wallet.total_profit_pct != 0.0,
-//             "Profit percentage should not be zero"
-//         );
-//         println!(
-//             "TOKEN AMOUNTS 12345: {} {}",
-//             backtest.wallet.amount_token_a, backtest.wallet.amount_token_b
-//         );
+        // Assertions
+        assert!(
+            backtest.wallet.amount_a_fees_collected > U256::zero(),
+            "Should have collected some fees for token A"
+        );
+        assert!(
+            backtest.wallet.amount_b_fees_collected > U256::zero(),
+            "Should have collected some fees for token B"
+        );
+        assert!(
+            backtest.wallet.total_profit > 0.0,
+            "Total profit should be positive"
+        );
+        assert!(
+            backtest.wallet.total_profit_pct > 0.0,
+            "Profit percentage should  be positive"
+        );
+    }
 
-//         // Additional assertions to check if the amounts make sense
-//         assert!(
-//             backtest.wallet.amount_token_a != U256::from(500_000_000),
-//             "Token A amount should have changed"
-//         );
-//         assert!(
-//             backtest.wallet.amount_token_b != U256::from(500_000_000),
-//             "Token B amount should have changed"
-//         );
-//     }
+    #[tokio::test]
+    async fn test_finalize_strategy_oustide_range_in_token_b() {
+        let starting_amount_a = U256::from(100 * 10_i32.pow(6));
+        let starting_amount_b = U256::from(100 * 10_i32.pow(6));
 
-//     // #[tokio::test]
-//     // async fn test_finalize_strategy_oustide_range() {
-//     //     let mut liquidity_arr = create_test_liquidity_array();
-//     //     // Add a position to the liquidity array
-//     //     liquidity_arr.add_owners_position(
-//     //         OwnersPosition {
-//     //             owner: "".to_string(),
-//     //             lower_tick: 500,
-//     //             upper_tick: 600,
-//     //             liquidity: 1_000_000,
-//     //             fees_owed_a: 0,
-//     //             fees_owed_b: 0,
-//     //         },
-//     //         "test_position_2".to_string(),
-//     //     );
+        let current_tick = 11;
+        let lower_tick = current_tick - 100;
+        let upper_tick = current_tick + 100;
 
-//     //     let wallet = Wallet {
-//     //         token_a_addr: "TokenA".to_string(),
-//     //         token_b_addr: "TokenB".to_string(),
-//     //         amount_token_a: 500_000_000,
-//     //         amount_token_b: 500_000_000,
-//     //         token_a_decimals: 6,
-//     //         token_b_decimals: 6,
-//     //         amount_a_fees_collected: 0,
-//     //         amount_b_fees_collected: 0,
-//     //         total_profit: 0.0,
-//     //         total_profit_pct: 0.0,
-//     //     };
-//     //     let strategy = Box::new(MockStrategy);
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: starting_amount_a,
+            amount_token_b: starting_amount_b,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: U256::zero(),
+            amount_b_fees_collected: U256::zero(),
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
 
-//     //     let mut backtest = Backtest::new(1000, 1000, liquidity_arr, wallet, strategy);
+        let mut backtest = Backtest::new(
+            starting_amount_a,
+            starting_amount_b,
+            create_test_liquidity_array(),
+            wallet,
+            strategy,
+        );
 
-//     //     backtest.liquidity_arr.current_tick = 11;
-//     //     backtest.liquidity_arr.current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(11));
+        backtest.liquidity_arr.current_tick = current_tick;
+        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
 
-//     //     // Simulate some swaps to accumulate fees
-//     //     let swap_actions = vec![Action::Swap {
-//     //         amount_in: 100,
-//     //         is_sell: true,
-//     //     }];
+        // have to create multiple positions for one to be out of range
+        // cant use add owners position since that has limited balance
+        backtest.liquidity_arr.update_liquidity(
+            lower_tick - 100,
+            upper_tick + 100,
+            calculate_liquidity(
+                starting_amount_a * 5,
+                starting_amount_b * 5,
+                tick_to_sqrt_price_u256(current_tick),
+                tick_to_sqrt_price_u256(lower_tick - 100),
+                tick_to_sqrt_price_u256(upper_tick + 100),
+            )
+            .as_u128() as i128,
+            true,
+        );
 
-//     //     for action in swap_actions {
-//     //         backtest.execute_action(action).unwrap();
-//     //     }
+        // Simulate some swaps to accumulate fees
+        let all_actions = vec![
+            Action::CreatePosition {
+                position_id: "test_position".to_string(),
+                lower_tick,
+                upper_tick,
+                amount_a: starting_amount_a,
+                amount_b: starting_amount_b,
+            },
+            Action::Swap {
+                amount_in: U256::from(800_000_000_i128),
+                is_sell: false,
+            },
+            Action::FinalizeStrategy {
+                position_id: "test_position".to_string(),
+                starting_sqrt_price: tick_to_sqrt_price_u256(current_tick), // pass the starting tick
+            },
+        ];
 
-//     //     let action = Action::FinalizeStrategy {
-//     //         position_id: "test_position_2".to_string(),
-//     //         starting_sqrt_price: 1_000_000,
-//     //     };
+        for action in all_actions {
+            backtest.execute_action(action).unwrap();
+        }
 
-//     //     backtest.execute_action(action).unwrap();
+        // Assertions
+        assert!(
+            backtest.wallet.amount_b_fees_collected > U256::zero(),
+            "Should have collected some fees for token B"
+        );
+        assert!(
+            backtest.wallet.amount_a_fees_collected == U256::zero(),
+            "Should have not collected fees for token A"
+        );
+        println!("WALLET INFO: {:?}", backtest.wallet);
 
-//     //     // Assertions
-//     //     assert!(
-//     //         backtest.wallet.amount_a_fees_collected == 0,
-//     //         "No fees for token A"
-//     //     );
-//     //     assert!(
-//     //         backtest.wallet.amount_b_fees_collected == 0,
-//     //         "No fees for token B"
-//     //     );
+        assert!(
+            backtest.wallet.amount_token_a == U256::zero(),
+            "Wiped out token a liquidity"
+        );
+        assert!(
+            backtest.wallet.amount_token_b > starting_amount_b,
+            "All liquidity in token B, above starting"
+        );
 
-//     //     // Amounts still change due to price movement.
-//     //     assert!(
-//     //         backtest.wallet.amount_token_a != 500_000_000,
-//     //         "Token A amount should have changed"
-//     //     );
-//     //     assert!(
-//     //         backtest.wallet.amount_token_b != 500_000_000,
-//     //         "Token B amount should have changed"
-//     //     );
-//     // }
+        assert!(
+            backtest.wallet.total_profit > 0.0,
+            "Total profit should be positive"
+        );
+        assert!(
+            backtest.wallet.total_profit_pct > 0.0,
+            "Profit percentage should  be positive"
+        );
+    }
 
-//     // #[tokio::test]
-//     // async fn test_finalize_strategy_all_amounts_in_b() {
-//     //     let mut liquidity_arr = create_test_liquidity_array();
-//     //     let amount_token_a = 500_000_000_u128;
-//     //     let amount_token_b = 500_000_000_u128;
-//     //     let lower_tick = 0;
-//     //     let upper_tick = 10;
+    #[tokio::test]
+    async fn test_finalize_strategy_oustide_range_in_token_a() {
+        let starting_amount_a = U256::from(100 * 10_i32.pow(6));
+        let starting_amount_b = U256::from(100 * 10_i32.pow(6));
 
-//     //     let liquidity = calculate_correct_liquidity(
-//     //         amount_token_a,
-//     //         amount_token_b,
-//     //         sqrt_price_to_fixed(tick_to_sqrt_price(5)),
-//     //         sqrt_price_to_fixed(tick_to_sqrt_price(lower_tick)),
-//     //         sqrt_price_to_fixed(tick_to_sqrt_price(upper_tick)),
-//     //     );
+        let current_tick = 11;
+        let lower_tick = current_tick - 100;
+        let upper_tick = current_tick + 100;
 
-//     //     println!("LIQUIDITY TO PASS IN: {}", liquidity);
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: starting_amount_a,
+            amount_token_b: starting_amount_b,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: U256::zero(),
+            amount_b_fees_collected: U256::zero(),
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
 
-//     //     // Add a position to the liquidity array
-//     //     liquidity_arr.add_owners_position(
-//     //         OwnersPosition {
-//     //             owner: "meow".to_string(),
-//     //             lower_tick,
-//     //             upper_tick,
-//     //             liquidity,
-//     //             fees_owed_a: 0,
-//     //             fees_owed_b: 0,
-//     //         },
-//     //         "test_position_3".to_string(),
-//     //     );
+        let mut backtest = Backtest::new(
+            starting_amount_a,
+            starting_amount_b,
+            create_test_liquidity_array(),
+            wallet,
+            strategy,
+        );
 
-//     //     let wallet = Wallet {
-//     //         token_a_addr: "TokenA".to_string(),
-//     //         token_b_addr: "TokenB".to_string(),
-//     //         amount_token_a,
-//     //         amount_token_b,
-//     //         token_a_decimals: 6,
-//     //         token_b_decimals: 6,
-//     //         amount_a_fees_collected: 0,
-//     //         amount_b_fees_collected: 0,
-//     //         total_profit: 0.0,
-//     //         total_profit_pct: 0.0,
-//     //     };
-//     //     let strategy = Box::new(MockStrategy);
+        backtest.liquidity_arr.current_tick = current_tick;
+        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
 
-//     //     let mut backtest = Backtest::new(500, 500, liquidity_arr, wallet, strategy);
+        // have to create multiple positions for one to be out of range
+        // cant use add owners position since that has limited balance
+        backtest.liquidity_arr.update_liquidity(
+            lower_tick - 100,
+            upper_tick + 100,
+            calculate_liquidity(
+                starting_amount_a * 5,
+                starting_amount_b * 5,
+                tick_to_sqrt_price_u256(current_tick),
+                tick_to_sqrt_price_u256(lower_tick - 100),
+                tick_to_sqrt_price_u256(upper_tick + 100),
+            )
+            .as_u128() as i128,
+            true,
+        );
 
-//     //     backtest.liquidity_arr.current_tick = 11;
-//     //     backtest.liquidity_arr.current_sqrt_price = sqrt_price_to_fixed(tick_to_sqrt_price(11));
+        // Simulate some swaps to accumulate fees
+        let all_actions = vec![
+            Action::CreatePosition {
+                position_id: "test_position".to_string(),
+                lower_tick,
+                upper_tick,
+                amount_a: starting_amount_a,
+                amount_b: starting_amount_b,
+            },
+            Action::Swap {
+                amount_in: U256::from(600_000_000_i128),
+                is_sell: true, // SELLING TOKEN A
+            },
+            Action::FinalizeStrategy {
+                position_id: "test_position".to_string(),
+                starting_sqrt_price: tick_to_sqrt_price_u256(current_tick), // pass the starting tick
+            },
+        ];
 
-//     //     let action = Action::FinalizeStrategy {
-//     //         position_id: "test_position_3".to_string(),
-//     //         starting_sqrt_price: sqrt_price_to_fixed(tick_to_sqrt_price(2)),
-//     //     };
+        for action in all_actions {
+            backtest.execute_action(action).unwrap();
+        }
 
-//     //     backtest.execute_action(action).unwrap();
+        // Assertions
+        assert!(
+            backtest.wallet.amount_a_fees_collected > U256::zero(),
+            "Should have collected some fees for token A"
+        );
+        assert!(
+            backtest.wallet.amount_b_fees_collected == U256::zero(),
+            "Should have not collected fees for token B"
+        );
+        println!("WALLET INFO: {:?}", backtest.wallet);
 
-//     //     assert!(
-//     //         backtest.wallet.amount_a_fees_collected == 0,
-//     //         "No fees for token A"
-//     //     );
-//     //     assert!(
-//     //         backtest.wallet.amount_b_fees_collected == 0,
-//     //         "No fees for token B"
-//     //     );
+        assert!(
+            backtest.wallet.amount_token_b == U256::zero(),
+            "Wiped out token B liquidity"
+        );
+        assert!(
+            backtest.wallet.amount_token_a > starting_amount_a,
+            "All liquidity in token A, above starting"
+        );
 
-//     //     // Amounts still change due to price movement.
-//     //     assert!(
-//     //         backtest.wallet.amount_token_a == 0,
-//     //         "Token A amount should have changed"
-//     //     );
-//     //     println!("TOKEN B: {}", backtest.wallet.amount_token_b);
-//     //     assert!(
-//     //         backtest.wallet.amount_token_b == 500_000_000,
-//     //         "Token B amount should have changed"
-//     //     );
-//     // }
-// }
+        assert!(
+            backtest.wallet.total_profit > 0.0,
+            "Total profit should be positive"
+        );
+        assert!(
+            backtest.wallet.total_profit_pct > 0.0,
+            "Profit percentage should  be positive"
+        );
+    }
+}
