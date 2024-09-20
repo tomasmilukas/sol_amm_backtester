@@ -1,4 +1,4 @@
-use std::{collections::HashMap, thread, time::Duration};
+use std::collections::HashMap;
 
 use crate::utils::{
     error::LiquidityArrayError,
@@ -319,8 +319,6 @@ impl LiquidityArray {
         let mut amount_out = U256::zero();
 
         while remaining_amount > U256::zero() {
-            // thread::sleep(Duration::from_millis(8));
-
             let liquidity = self.active_liquidity;
 
             // is_sell == direction_down not up, thus reverse
