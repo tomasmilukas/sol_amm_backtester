@@ -314,7 +314,6 @@ impl Backtest {
                     tick_to_sqrt_price_u256(lower_tick),
                     tick_to_sqrt_price_u256(upper_tick),
                 );
-                println!("CALCULATED LIQ WHEN ADDING POSITION: {}", liquidity);
 
                 self.liquidity_arr.add_owners_position(
                     OwnersPosition {
@@ -343,24 +342,11 @@ impl Backtest {
                 self.wallet.amount_a_fees_collected += fees_a;
                 self.wallet.amount_b_fees_collected += fees_b;
 
-                println!(
-                    "RANDOM INFO INSIDE FINALIZE STRAT: {} {} {:?}",
-                    fees_a, fees_b, position
-                );
-
                 let (amount_a, amount_b) = calculate_amounts(
                     U256::from(position.liquidity),
                     self.liquidity_arr.current_sqrt_price,
                     tick_to_sqrt_price_u256(position.lower_tick),
                     tick_to_sqrt_price_u256(position.upper_tick),
-                );
-
-                println!(
-                    "AMOUNTS INFO INSIDE FINALIZE STRAT: {} {} {} {}",
-                    amount_a,
-                    amount_b,
-                    self.start_info.token_a_amount,
-                    self.start_info.token_b_amount
                 );
 
                 self.wallet.amount_token_a += amount_a;
@@ -554,6 +540,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rebalance_action() {
+        let starting_amount_a = U256::from(100 * 10_i32.pow(6));
+        let starting_amount_b = U256::from(100 * 10_i32.pow(6));
+
+        let current_tick = 11;
+        let lower_tick = current_tick - 100;
+        let upper_tick = current_tick + 100;
+
+        let wallet = Wallet {
+            token_a_addr: "TokenA".to_string(),
+            token_b_addr: "TokenB".to_string(),
+            amount_token_a: starting_amount_a,
+            amount_token_b: starting_amount_b,
+            token_a_decimals: 6,
+            token_b_decimals: 6,
+            amount_a_fees_collected: U256::zero(),
+            amount_b_fees_collected: U256::zero(),
+            total_profit: 0.0,
+            total_profit_pct: 0.0,
+        };
+        let strategy = Box::new(MockStrategy);
+
+        let mut backtest = Backtest::new(
+            starting_amount_a,
+            starting_amount_b,
+            create_test_liquidity_array(),
+            wallet,
+            strategy,
+        );
+
+        backtest.liquidity_arr.current_tick = current_tick;
+        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
+
+        // have to create multiple positions since if we rebalance the only position that exists, errors happen.
+        backtest.liquidity_arr.update_liquidity(
+            lower_tick - 100,
+            upper_tick + 100,
+            calculate_liquidity(
+                starting_amount_a * 5,
+                starting_amount_b * 5,
+                tick_to_sqrt_price_u256(current_tick),
+                tick_to_sqrt_price_u256(lower_tick - 100),
+                tick_to_sqrt_price_u256(upper_tick + 100),
+            )
+            .as_u128() as i128,
+            true,
+        );
+
+        // Actions sequence
+        let all_actions = vec![
+            Action::CreatePosition {
+                position_id: "test_position".to_string(),
+                lower_tick,
+                upper_tick,
+                amount_a: starting_amount_a,
+                amount_b: starting_amount_b,
+            },
+            Action::Swap {
+                amount_in: U256::from(7_000_000),
+                is_sell: true,
+            },
+            Action::Swap {
+                amount_in: U256::from(10_000_000),
+                is_sell: false,
+            },
+            Action::Swap {
+                amount_in: U256::from(3_000_000),
+                is_sell: true,
+            },
+            Action::Rebalance {
+                position_id: "test_position".to_string(),
+                rebalance_ratio: 0.5,            // 50/50 ratio
+                new_lower_tick: lower_tick - 50, // Slightly wider range
+                new_upper_tick: upper_tick + 50,
+            },
+        ];
+
+        // Execute all actions
+        for action in all_actions {
+            backtest.execute_action(action).unwrap();
+        }
+
+        // Get the rebalanced position
+        let rebalanced_position = backtest
+            .liquidity_arr
+            .positions
+            .get("test_position")
+            .unwrap();
+
+        // Assertions
+        assert!(
+            rebalanced_position.lower_tick == lower_tick - 50,
+            "Lower tick should be updated"
+        );
+        assert!(
+            rebalanced_position.upper_tick == upper_tick + 50,
+            "Upper tick should be updated"
+        );
+
+        assert!(
+            backtest.wallet.amount_a_fees_collected > U256::zero(),
+            "Should have collected some fees for token A"
+        );
+        assert!(
+            backtest.wallet.amount_b_fees_collected > U256::zero(),
+            "Should have collected some fees for token B"
+        );
+
+        assert!(
+            backtest.wallet.amount_token_a == U256::zero(),
+            "Nothing left in wallet"
+        );
+        assert!(
+            backtest.wallet.amount_token_b == U256::zero(),
+            "Nothing left in wallet"
+        );
+    }
+
+    #[tokio::test]
     async fn test_finalize_strategy_in_range() {
         let starting_amount_a = U256::from(100 * 10_i32.pow(6));
         let starting_amount_b = U256::from(100 * 10_i32.pow(6));
@@ -719,7 +824,6 @@ mod tests {
             backtest.wallet.amount_a_fees_collected == U256::zero(),
             "Should have not collected fees for token A"
         );
-        println!("WALLET INFO: {:?}", backtest.wallet);
 
         assert!(
             backtest.wallet.amount_token_a == U256::zero(),
@@ -822,7 +926,6 @@ mod tests {
             backtest.wallet.amount_b_fees_collected == U256::zero(),
             "Should have not collected fees for token B"
         );
-        println!("WALLET INFO: {:?}", backtest.wallet);
 
         assert!(
             backtest.wallet.amount_token_b == U256::zero(),
