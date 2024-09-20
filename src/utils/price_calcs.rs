@@ -568,4 +568,46 @@ mod tests {
             tick_to_sqrt_price_u256(upper_tick),
         );
     }
+
+    #[test]
+    fn test_revert_amounts_from_liquidity() {
+        let curr_sqrt_price = tick_to_sqrt_price_u256(10);
+        let lower_sqrt_price = tick_to_sqrt_price_u256(10 - 5);
+        let upper_sqrt_price = tick_to_sqrt_price_u256(10 + 5);
+
+        let starting_amount_a = U256::from(1000);
+        let starting_amount_b = U256::from(1000);
+
+        let liquidity = calculate_liquidity(
+            starting_amount_a,
+            starting_amount_b,
+            curr_sqrt_price,
+            lower_sqrt_price,
+            upper_sqrt_price,
+        );
+
+        let (amount_a, amount_b) = calculate_amounts(
+            liquidity,
+            curr_sqrt_price,
+            lower_sqrt_price,
+            upper_sqrt_price,
+        );
+
+        let TOLERANCE = U256::from(2);
+
+        // THE AMOUNTS COME OUT AS 999 FOR BOTH. KEEP IN MIND THESE CALCS WILL NEVER BE 100% precise, its same in the real world systems. GOOD ENOUGH THO.
+        assert!(
+            (starting_amount_a - amount_a) <= TOLERANCE,
+            "amount_a should be within tolerance. Expected: {}, Got: {}",
+            starting_amount_a,
+            amount_a
+        );
+
+        assert!(
+            (starting_amount_b - amount_b) <= TOLERANCE,
+            "amount_b should be within tolerance. Expected: {}, Got: {}",
+            starting_amount_b,
+            amount_b
+        );
+    }
 }
