@@ -34,6 +34,7 @@ impl PositionsRepo {
         transaction: &mut Transaction<'a, Postgres>,
         pool_address: &str,
         position: &PositionModel,
+        version: i32,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
@@ -54,6 +55,7 @@ impl PositionsRepo {
         .bind(position.liquidity.to_string())
         .bind(position.tick_lower)
         .bind(position.tick_upper)
+        .bind(version)
         .bind(position.created_at)
         .execute(transaction)
         .await?;
