@@ -19,17 +19,25 @@ use crate::{
 
 use anyhow::{Context, Result};
 use api::{positions_api::PositionsApi, transactions_api::TransactionApi};
-use backtester::utils::{create_full_liquidity_range, sync_backwards};
+// use backtester::{
+//     backtest_utils::{create_full_liquidity_range, sync_backwards},
+//     backtester::{Backtest, Strategy, Wallet},
+//     simple_rebalance_strategy::SimpleRebalanceStrategy,
+// };
 use chrono::{Duration, Utc};
 use config::AppConfig;
 use dotenv::dotenv;
-use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
+use repositories::{
+    positions_repo::PositionsRepo,
+    transactions_repo::{TransactionRepo, TransactionRepoTrait},
+};
 use services::{
     positions_service::PositionsService, transactions_service::TransactionsService,
     transactions_sync_amm_service::create_amm_service,
 };
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc};
+use utils::error::SyncError;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,26 +47,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: cargo run [sync|backtest] [options]");
+        println!("Usage: cargo run [sync|backtest]");
         return Ok(());
     }
 
     match args[1].as_str() {
         "sync" => {
-            let days = if args.len() > 2 {
-                args[2].parse().unwrap_or(config.sync_days)
-            } else {
-                config.sync_days
-            };
-            sync_data(&config, days).await?;
+            sync_data(&config, config.sync_days).await?;
         }
         "backtest" => {
-            if args.len() < 3 {
-                println!("Usage: cargo run backtest <strategy_name>");
-                return Ok(());
-            }
-            let strategy = &args[2];
-            run_backtest(&config, strategy).await?;
+            run_backtest(&config).await?;
         }
         _ => {
             println!("Unknown command. Use 'sync' or 'backtest'.");
@@ -161,37 +159,102 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     Ok(())
 }
 
-async fn run_backtest(config: &AppConfig, strategy: &str) -> Result<()> {
-    println!("Running backtest with strategy: {}", strategy);
+async fn run_backtest(config: &AppConfig) -> Result<()> {
+    // println!("Running backtest with strategy: {}", &config.strategy);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&config.database_url)
-        .await?;
+    // let pool = PgPoolOptions::new()
+    //     .max_connections(5)
+    //     .connect(&config.database_url)
+    //     .await?;
 
-    let pool_repo = PoolRepo::new(pool.clone());
-    let pool_api = PoolApi::new()?;
-    let pool_service = PoolService::new(pool_repo.clone(), pool_api);
+    // let pool_repo = PoolRepo::new(pool.clone());
+    // let pool_api = PoolApi::new()?;
+    // let pool_service = PoolService::new(pool_repo.clone(), pool_api);
 
-    let pool_data = pool_service.get_pool_data(&config.pool_address).await?;
+    // let pool_data = pool_service.get_pool_data(&config.pool_address).await?;
 
-    let positions_repo = PositionsRepo::new(pool.clone());
-    let positions_api = PositionsApi::new()?;
-    let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
+    // let positions_repo = PositionsRepo::new(pool.clone());
+    // let positions_api = PositionsApi::new()?;
+    // let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
 
-    let positions_data = positions_service
-        .get_position_data(&config.pool_address)
-        .await?;
+    // let positions_data = positions_service
+    //     .get_position_data(&config.pool_address)
+    //     .await?;
 
-    let tx_repo = TransactionRepo::new(pool);
+    // let tx_repo = TransactionRepo::new(pool);
 
-    // Create the liquidity range "at present" from db.
-    let liquidity_range_arr =
-        create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
+    // let latest_transaction = tx_repo
+    //     .fetch_highest_tx_swap(&pool_data.address)
+    //     .await
+    //     .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
-    // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
-    let original_starting_liquidity_arr =
-        sync_backwards(&tx_repo, liquidity_range_arr, pool_data, 10_000).await?;
+    // // Create the liquidity range "at present" from db.
+    // let liquidity_range_arr =
+    //     create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
+
+    // // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
+    // let (original_starting_liquidity_arr, lowest_tx_id) = sync_backwards(
+    //     &tx_repo,
+    //     liquidity_range_arr,
+    //     pool_data.clone(),
+    //     latest_transaction.clone(),
+    //     10_000,
+    // )
+    // .await?;
+
+    // let amount_token_a = config.token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32);
+    // let amount_token_b = config.token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32);
+
+    // let wallet = Wallet {
+    //     token_a_addr: pool_data.token_a_address,
+    //     token_b_addr: pool_data.token_b_address,
+    //     amount_token_a,
+    //     amount_token_b,
+    //     token_a_decimals: pool_data.token_a_decimals,
+    //     token_b_decimals: pool_data.token_b_decimals,
+    //     amount_a_fees_collected: 0,
+    //     amount_b_fees_collected: 0,
+    //     total_profit: 0.0,
+    //     total_profit_pct: 0.0,
+    // };
+
+    // let strategy: Box<dyn Strategy> = match config.strategy.as_str() {
+    //     "NO_REBALANCE" => Box::new(SimpleRebalanceStrategy::new(
+    //         original_starting_liquidity_arr.current_tick,
+    //         config.range,
+    //     )),
+    //     "SIMPLE_REBALANCE" => Box::new(SimpleRebalanceStrategy::new(
+    //         original_starting_liquidity_arr.current_tick,
+    //         config.range,
+    //     )),
+    //     _ => return Err(anyhow::anyhow!("Unknown strategy: {}", &config.strategy)),
+    // };
+
+    // strategy.initialize_strategy(amount_token_a, amount_token_b);
+
+    // let mut backtest = Backtest::new(
+    //     config.token_a_amount,
+    //     config.token_b_amount,
+    //     original_starting_liquidity_arr,
+    //     wallet,
+    //     strategy,
+    // );
+
+    // backtest
+    //     .sync_forward(
+    //         &tx_repo,
+    //         lowest_tx_id,
+    //         latest_transaction.unwrap().tx_id,
+    //         &config.pool_address,
+    //         1000,
+    //     )
+    //     .await
+    //     .unwrap();
+
+    // println!(
+    //     "BACTESTING DONE! THIS IS YOUR TOTAL PROFIT {} AND PROFIT PCT {}",
+    //     backtest.wallet.total_profit, backtest.wallet.total_profit
+    // );
 
     Ok(())
 }
