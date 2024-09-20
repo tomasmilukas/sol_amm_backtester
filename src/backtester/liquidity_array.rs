@@ -1,4 +1,4 @@
-use std::{collections::HashMap, thread, time::Duration};
+use std::collections::HashMap;
 
 use crate::utils::{
     error::LiquidityArrayError,
@@ -318,11 +318,7 @@ impl LiquidityArray {
         let mut remaining_amount = amount_in - fee_amount;
         let mut amount_out = U256::zero();
 
-        println!("PRE WHILE LOOP!");
-
         while remaining_amount > U256::zero() {
-            thread::sleep(Duration::from_millis(8));
-
             let liquidity = self.active_liquidity;
 
             // is_sell == direction_down not up, thus reverse
@@ -331,7 +327,6 @@ impl LiquidityArray {
 
             let lower_sqrt_price = tick_to_sqrt_price_u256(lower_initialized_tick_data.tick);
             let upper_sqrt_price = tick_to_sqrt_price_u256(upper_initialized_tick_data.tick);
-            println!("PRE 00000");
 
             let max_in = if is_sell {
                 // Token_a are tokens on the upper side of current price. The logic here is that we calculate amount of liquidity by going from lower to current, which is the same as from curr to lower.
@@ -352,17 +347,11 @@ impl LiquidityArray {
                 );
                 amount_b_in_range
             };
-            println!(
-                "PRE 11111: {} {} {}",
-                remaining_amount, max_in, liquidity
-            );
 
             // fee_remaining_amount has to be correctly adjusted to distribute at separate ticks.
             let step_amount = std::cmp::min(remaining_amount, max_in);
             let step_fee = (remaining_fee * step_amount) / remaining_amount;
             let fee_growth = (step_fee * Q128) / liquidity;
-
-            println!("PRE IF/ELSE");
 
             // Stay within the initialized range.
             if remaining_amount <= max_in {
@@ -401,8 +390,6 @@ impl LiquidityArray {
                 }
 
                 current_sqrt_price = new_sqrt_price;
-
-                println!("IN NO TICK CROSS ZONE");
                 break;
             } else {
                 // Cross the tick range and calculate new active liquidity and new fee_growth_outside for upper or lower tick.
@@ -463,7 +450,6 @@ impl LiquidityArray {
                     // we are manually canceling out two minuses
                     self.active_liquidity += U256::from(relevant_tick.net_liquidity.unsigned_abs())
                 }
-                println!("IN TICK CROSS ZONE");
 
                 // Update initialized tick
                 let index = self.get_index(relevant_tick.tick);
