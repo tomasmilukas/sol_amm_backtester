@@ -601,9 +601,6 @@ mod tests {
         let dec_diff = 3;
         let mut array = setup_liquidity_array(price, dec_diff, 5, 5 * 120);
 
-        // Get the total liquidity from the setup
-        let total_liquidity = array.active_liquidity;
-
         // Add Alice's position
         let alice_liquidity = 4_000_000_000_u128;
         array.add_owners_position(

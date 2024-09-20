@@ -19,9 +19,10 @@ impl TransactionsService {
     }
 
     pub async fn update_and_fill_transactions(&self, pool_address: &str) -> Result<()> {
+        // any version works, so we pick the first one, since we just need the tick data.
         let position_data = self
             .positions_repo
-            .get_positions_by_pool_address(pool_address)
+            .get_positions_by_pool_address_and_version(pool_address, 0)
             .await
             .context("Failed to get positions by pool address")?;
 

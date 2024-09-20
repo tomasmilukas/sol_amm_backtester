@@ -60,28 +60,6 @@ impl PoolRepo {
         Ok(())
     }
 
-    pub async fn update_liquidity(
-        &self,
-        address: &str,
-        total_liquidity: u128,
-    ) -> Result<(), sqlx::Error> {
-        // Total liquidity stored as string bcos postgres only supports upto i64.
-        query(
-            r#"
-            UPDATE pools
-            SET total_liquidity = $1, last_updated_at = $2
-            WHERE address = $3
-            "#,
-        )
-        .bind(total_liquidity.to_string())
-        .bind(Utc::now())
-        .bind(address)
-        .execute(&self.db)
-        .await?;
-
-        Ok(())
-    }
-
     pub async fn get_pool_by_address(
         &self,
         address: &str,

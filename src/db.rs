@@ -17,7 +17,6 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             token_a_vault TEXT NOT NULL,
             token_b_vault TEXT NOT NULL,
             tick_spacing SMALLINT NOT NULL,
-            total_liquidity TEXT,
             fee_rate SMALLINT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -46,16 +45,16 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
 
         r#"
         CREATE TABLE IF NOT EXISTS positions (
-            address TEXT PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
+            address TEXT NOT NULL,
             pool_address TEXT NOT NULL REFERENCES pools(address),
             liquidity TEXT NOT NULL,
             tick_lower INTEGER NOT NULL,
             tick_upper INTEGER NOT NULL,
+            version INTEGER NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
-        "CREATE INDEX IF NOT EXISTS idx_positions_pool_address ON positions(pool_address)",
     ];
 
     for statement in statements.iter() {

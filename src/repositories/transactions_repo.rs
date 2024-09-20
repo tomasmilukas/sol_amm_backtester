@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPool;
 use sqlx::Row;
 
@@ -257,6 +258,32 @@ impl TransactionRepo {
         result
             .map(|row| self.row_to_transaction_model(&row))
             .transpose()
+    }
+
+    pub async fn get_transaction_at_or_after_timestamp(
+        &self,
+        pool_address: &str,
+        timestamp: DateTime<Utc>,
+    ) -> Result<TransactionModelFromDB> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                tx_id, signature, pool_address, block_time, block_time_utc,
+                transaction_type, ready_for_backtesting, data
+            FROM transactions
+            WHERE 
+                pool_address = $1
+                AND block_time_utc >= $2
+            ORDER BY block_time_utc ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(pool_address)
+        .bind(timestamp)
+        .fetch_one(&self.pool)
+        .await?;
+
+        self.row_to_transaction_model(&row)
     }
 
     fn row_to_transaction_model(
