@@ -1,7 +1,5 @@
 use uint::construct_uint;
 
-use super::error::PriceCalcError;
-
 construct_uint! {
     pub struct U256(4);
 }
