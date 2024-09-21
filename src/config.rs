@@ -20,9 +20,6 @@ pub struct AppConfig {
     pub pool_address: String,
     pub strategy: StrategyType,
     pub strategy_details: HashMap<String, serde_json::Value>,
-    pub token_a_amount: u128,
-    pub token_b_amount: u128,
-    pub range: i32,
     pub sync_days: i64,
     pub sync_mode: SyncMode,
     pub pool_address_to_backtest: String,
@@ -65,18 +62,6 @@ impl AppConfig {
             database_url: env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
             pool_address: env::var("POOL_ADDRESS").context("POOL_ADDRESS must be set")?,
             strategy,
-            token_a_amount: env::var("TOKEN_A_AMOUNT")
-                .context("TOKEN_A_AMOUNT must be set")?
-                .parse::<u128>()
-                .context("Failed to parse TOKEN_A_AMOUNT")?,
-            token_b_amount: env::var("TOKEN_B_AMOUNT")
-                .context("TOKEN_B_AMOUNT must be set")?
-                .parse::<u128>()
-                .context("Failed to parse TOKEN_B_AMOUNT")?,
-            range: env::var("RANGE")
-                .context("RANGE must be set")?
-                .parse::<i32>()
-                .context("Failed to parse RANGE")?,
             sync_days: env::var("SYNC_DAYS")
                 .unwrap_or_else(|_| "30".to_string())
                 .parse()
@@ -96,8 +81,8 @@ impl AppConfig {
 
     fn validate_strategy_details(&self) -> Result<()> {
         let required_keys = match self.strategy {
-            StrategyType::NoRebalance => vec!["lower_tick", "upper_tick"],
-            StrategyType::SimpleRebalance => vec!["range"],
+            StrategyType::NoRebalance => vec!["lower_tick", "upper_tick", "token_a_amount", "token_b_amount"],
+            StrategyType::SimpleRebalance => vec!["range", "token_a_amount", "token_b_amount"],
         };
 
         for key in required_keys {

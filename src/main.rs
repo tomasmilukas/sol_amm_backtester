@@ -25,11 +25,7 @@ use backtester::{
     no_rebalance_strategy::NoRebalanceStrategy,
     simple_rebalance_strategy::SimpleRebalanceStrategy,
 };
-// use backtester::{
-//     backtest_utils::{create_full_liquidity_range, sync_backwards},
-//     backtester::{Backtest, Strategy, Wallet},
-//     simple_rebalance_strategy::SimpleRebalanceStrategy,
-// };
+
 use chrono::{Duration, Utc};
 use config::{AppConfig, StrategyType};
 use dotenv::dotenv;
@@ -141,13 +137,13 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     // Sync transactions
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
-    match amm_service
-        .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
-        .await
-    {
-        Ok(_f) => println!("Synced transactions successfully"),
-        Err(e) => eprintln!("Error syncing transactions: {}", e),
-    }
+    // match amm_service
+    //     .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
+    //     .await
+    // {
+    //     Ok(_f) => println!("Synced transactions successfully"),
+    //     Err(e) => eprintln!("Error syncing transactions: {}", e),
+    // }
 
     println!("Transactions synced, time to fill in missing data!");
 
@@ -196,7 +192,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         .get_position_data_for_transaction(
             tx_repo.clone(),
             &config.pool_address,
-            latest_transaction.clone().unwrap().block_time_utc,
+            latest_transaction.clone().unwrap(),
         )
         .await?;
 
@@ -214,10 +210,13 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     )
     .await?;
 
+    let token_a_amount: u128 = config.get_strategy_detail("token_a_amount")?;
+    let token_b_amount: u128 = config.get_strategy_detail("token_b_amount")?;
+
     let amount_token_a =
-        U256::from(config.token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32));
+        U256::from(token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32));
     let amount_token_b =
-        U256::from(config.token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32));
+        U256::from(token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32));
 
     let wallet = Wallet {
         token_a_addr: pool_data.token_a_address,

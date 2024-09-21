@@ -28,13 +28,6 @@ impl PositionsService {
             .await
             .context("Failed to get positions data")?;
 
-        // Start a transaction
-        let mut transaction = self
-            .positions_repo
-            .begin_transaction()
-            .await
-            .context("Failed to start transaction")?;
-
         // Get the latest version for the pool and increment it
         let latest_version = self
             .positions_repo
@@ -43,15 +36,17 @@ impl PositionsService {
             .context("Failed to get latest version for pool")?;
         let new_version = latest_version + 1;
 
+        // Start a transaction
+        let mut transaction = self
+            .positions_repo
+            .begin_transaction()
+            .await
+            .context("Failed to start transaction")?;
+
         // Upsert positions within the transaction
         for position in positions {
             self.positions_repo
-                .upsert_in_transaction(
-                    &mut transaction,
-                    pool_address,
-                    &position,
-                    new_version,
-                )
+                .upsert_in_transaction(&mut transaction, pool_address, &position, new_version)
                 .await
                 .with_context(|| format!("Failed to upsert position: {}", position.address))?;
         }
@@ -69,7 +64,7 @@ impl PositionsService {
         &self,
         tx_repo: TransactionRepo,
         pool_address: &str,
-        latest_tx_timestamp: DateTime<Utc>,
+        latest_tx: TransactionModelFromDB,
     ) -> Result<(Vec<PositionModel>, TransactionModelFromDB)> {
         let mut current_version = self
             .positions_repo
@@ -77,20 +72,25 @@ impl PositionsService {
             .await
             .context("Failed to get latest version")?;
 
-        while current_version >= 0 {
+        let mut latest_positions = None;
+
+        while current_version >= 1 {
             let positions = self
                 .positions_repo
                 .get_positions_by_pool_address_and_version(pool_address, current_version)
                 .await
                 .context("Failed to get positions for version")?;
 
-            let position_timestamp = positions
-                .iter()
-                .map(|p| p.created_at)
-                .max()
-                .ok_or_else(|| anyhow!("No positions found for version {}", current_version))?;
+            if positions.is_empty() {
+                current_version -= 1;
+                continue;
+            }
 
-            if latest_tx_timestamp >= position_timestamp {
+            latest_positions = Some(positions.clone());
+
+            let position_timestamp = positions.iter().map(|p| p.created_at).max().unwrap();
+
+            if latest_tx.block_time_utc >= position_timestamp {
                 // This is the case we want
                 let transaction = tx_repo
                     .get_transaction_at_or_after_timestamp(pool_address, position_timestamp)
@@ -105,6 +105,16 @@ impl PositionsService {
         }
 
         // If we've gone through all versions and still haven't found a match
-        Err(anyhow!("No suitable positions found. The discrepancy between the latest transaction and the earliest positions is too large."))
+        if let Some(latest_positions) = latest_positions {
+            let latest_position_timestamp =
+                latest_positions.iter().map(|p| p.created_at).max().unwrap();
+
+            println!("WARNING: Data gap detected. Latest transaction timestamp: {}, Earliest position timestamp: {}. Will proceed anyways.",
+                     latest_tx.block_time_utc, latest_position_timestamp);
+
+            Ok((latest_positions, latest_tx))
+        } else {
+            Err(anyhow!("No positions found for the given pool address"))
+        }
     }
 }

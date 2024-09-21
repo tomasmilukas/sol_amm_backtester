@@ -41,7 +41,7 @@ impl TransactionRepoTrait for TransactionRepo {
             r#"
             SELECT * FROM transactions 
             WHERE pool_address = $1 AND transaction_type = 'Swap'
-            ORDER BY tx_id DESC 
+            ORDER BY block_time DESC, tx_id DESC
             LIMIT 1
             "#,
         )
