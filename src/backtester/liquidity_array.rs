@@ -478,7 +478,7 @@ mod tests {
         amount_b: u128,
     ) -> LiquidityArray {
         let mut array = LiquidityArray::new(-30000, 30000, 2, 300);
-        let current_tick = price_to_tick(price as f64, decimal_diff);
+        let current_tick = price_to_tick(price as f64 / 10f64.powi(decimal_diff as i32));
 
         array.current_tick = current_tick;
         array.current_sqrt_price = tick_to_sqrt_price_u256(array.current_tick);
@@ -505,7 +505,7 @@ mod tests {
     fn test_get_upper_and_lower_ticks() {
         let price = 120;
         let dec_diff = 3;
-        let current_tick = price_to_tick(price as f64, 3);
+        let current_tick = price_to_tick(price as f64 / 10f64.powi(dec_diff as i32));
 
         let mut array = setup_liquidity_array(price, dec_diff, 5, 5 * 120);
 
@@ -572,7 +572,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            array.current_tick != price_to_tick(price as f64, dec_diff),
+            array.current_tick != price_to_tick(price as f64 / 10f64.powi(dec_diff as i32)),
             "Swap should have moved current tick."
         );
         assert!(

@@ -60,24 +60,16 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     let is_sell = swap_data.token_in == pool_model.token_a_address;
 
     if is_sell {
-        let tick = price_to_tick(
-            swap_data.amount_out / swap_data.amount_in,
-            pool_model.token_a_decimals - pool_model.token_b_decimals,
-        );
+        let tick = price_to_tick(swap_data.amount_out as f64 / swap_data.amount_in as f64);
 
         liquidity_array.current_tick = tick;
         liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     } else {
-        let tick = price_to_tick(
-            swap_data.amount_in / swap_data.amount_out,
-            pool_model.token_a_decimals - pool_model.token_b_decimals,
-        );
+        let tick = price_to_tick(swap_data.amount_in as f64 / swap_data.amount_out as f64);
 
         liquidity_array.current_tick = tick;
         liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     };
-
-    println!("PASS HERE");
 
     loop {
         let transactions = transaction_repo
@@ -120,8 +112,7 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
                     // flip the is_sell
-                    liquidity_array
-                        .simulate_swap(U256::from(swap_data.amount_in as u128), !is_sell)?;
+                    liquidity_array.simulate_swap(U256::from(swap_data.amount_in), !is_sell)?;
                 }
                 _ => {}
             }
@@ -191,8 +182,11 @@ mod tests {
                 data: TransactionData::Swap(SwapData {
                     token_in: "TokenAAddress".to_string(),
                     token_out: "TokenBAddress".to_string(),
-                    amount_in: 5.301077056,
-                    amount_out: 718.793826,
+                    // real prices (stuff below has to INCLUDE decimals):
+                    // amount_in: 5.301077056,
+                    // amount_out: 718.793826,
+                    amount_in: 5301077056,
+                    amount_out: 718793826,
                 }),
             }],
         };
@@ -271,8 +265,11 @@ mod tests {
                     token_in: "TokenAAddress".to_string(),
                     token_out: "TokenBAddress".to_string(),
                     // THIS CORRESPONDS TO TICK -19969. DONT TOUCH
-                    amount_in: 5.301077056,
-                    amount_out: 718.793826,
+                    // real nmrs (below has to be decimal included):
+                    // amount_in: 5.301077056,
+                    // amount_out: 718.793826,
+                    amount_in: 5301077056,
+                    amount_out: 718793826,
                 }),
             },
             10,
@@ -282,6 +279,8 @@ mod tests {
         assert!(result_1.is_ok(), "sync_backwards should succeed");
 
         let final_liquidity_array = result_1.unwrap().0;
+        let new_curr_sqrt_price = final_liquidity_array.current_sqrt_price;
+        let new_curr_tick = final_liquidity_array.current_tick;
 
         assert!(
             final_liquidity_array.current_tick >= starting_tick,
@@ -305,8 +304,11 @@ mod tests {
                     token_in: "TokenBAddress".to_string(),
                     token_out: "TokenAAddress".to_string(),
                     // MUST CORRESPOND TO TICK (-19959) since thats where it ended last time. the PRICE is 135.904
-                    amount_in: 4.0 * 135.904,
-                    amount_out: 4.0,
+                    // real price (below has to be real code):
+                    // amount_in: 4.0 * 135.904,
+                    // amount_out: 4.0,
+                    amount_in: 4 * 135904 * 10_u128.pow(6) / 1000, // the 1000 to normalize the price to 135.904
+                    amount_out: 4 * 10_u128.pow(9),
                 }),
             }],
         };
@@ -327,21 +329,25 @@ mod tests {
                     token_in: "TokenBAddress".to_string(),
                     token_out: "TokenAAddress".to_string(),
                     // MUST CORRESPOND TO TICK (-19959) since thats where it ended last time. the PRICE is 135.904
-                    amount_in: 135.904,
-                    amount_out: 1.0,
+                    // real price (below has to be real code):
+                    // amount_in: 1.0 * 135.904,
+                    // amount_out: 1.0,
+                    amount_in: 135904 * 10_u128.pow(6) / 1000, // the 1000 to normalize the price to 135.904
+                    amount_out: 1 * 10_u128.pow(9),
                 }),
             },
             10,
         )
         .await;
+
         let final_liquidity_array_2 = result_2.unwrap().0;
 
         assert!(
-            final_liquidity_array_2.current_tick <= starting_tick,
+            final_liquidity_array_2.current_tick <= new_curr_tick,
             "The BUY reversed transaction (ie sell) should have decreased the tick."
         );
         assert!(
-            final_liquidity_array_2.current_sqrt_price < starting_sqrt_price_u256,
+            final_liquidity_array_2.current_sqrt_price < new_curr_sqrt_price,
             "The BUY reversed transaction (ie sell) should have decreased the sqrtPrice."
         );
 
