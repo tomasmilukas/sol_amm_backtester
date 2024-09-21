@@ -307,8 +307,8 @@ mod tests {
                     // real price (below has to be real code):
                     // amount_in: 4.0 * 135.904,
                     // amount_out: 4.0,
-                    amount_in: 4 * 135904 * 10_u128.pow(6) / 1000, // the 1000 to normalize the price to 135.904
-                    amount_out: 4 * 10_u128.pow(9),
+                    amount_in: 4 * 135904 * 10_u64.pow(6) / 1000, // the 1000 to normalize the price to 135.904
+                    amount_out: 4 * 10_u64.pow(9),
                 }),
             }],
         };
@@ -332,8 +332,8 @@ mod tests {
                     // real price (below has to be real code):
                     // amount_in: 1.0 * 135.904,
                     // amount_out: 1.0,
-                    amount_in: 135904 * 10_u128.pow(6) / 1000, // the 1000 to normalize the price to 135.904
-                    amount_out: 1 * 10_u128.pow(9),
+                    amount_in: 135904 * 10_u64.pow(6) / 1000, // the 1000 to normalize the price to 135.904
+                    amount_out: 1 * 10_u64.pow(9),
                 }),
             },
             10,

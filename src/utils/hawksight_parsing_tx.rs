@@ -119,15 +119,15 @@ impl HawksightParser {
 
         // we check the path of a to b and calculate the correct amountin/amountout
         let (amount_in, amount_out) = if swap_data.a_to_b {
-            let amount_b = (swap_data.amount as u128 * price_numerator as u128)
-                / 10_u128.pow(pool_info.decimals_a as u32);
+            let amount_b = (swap_data.amount as u64 * price_numerator as u64)
+                / 10_u64.pow(pool_info.decimals_a as u32);
 
-            (swap_data.amount as u128, amount_b)
+            (swap_data.amount as u64, amount_b)
         } else {
-            let amount_a = (swap_data.amount as u128 * 10_u128.pow(pool_info.decimals_a as u32))
-                / price_numerator as u128;
+            let amount_a = (swap_data.amount as u64 * 10_u64.pow(pool_info.decimals_a as u32))
+                / price_numerator as u64;
 
-            (swap_data.amount as u128, amount_a)
+            (swap_data.amount as u64, amount_a)
         };
 
         let (token_in, token_out) = if swap_data.a_to_b {
@@ -161,7 +161,7 @@ impl HawksightParser {
             if message.starts_with("Program log: Will deposit: ") {
                 let parts: Vec<&str> = message.split_whitespace().collect();
                 if parts.len() >= 6 {
-                    let amount: u128 = parts[4].parse().unwrap_or(0);
+                    let amount: u64 = parts[4].parse().unwrap_or(0);
 
                     // since amount_a is always parsed first, we update that one.
                     if amount_a == 0 {

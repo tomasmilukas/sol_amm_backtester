@@ -148,7 +148,7 @@ impl OrcaStandardAMM {
         json: &Value,
         balance_type: &str,
         pool_address: &str,
-    ) -> Result<(String, u128, String, u128)> {
+    ) -> Result<(String, u64, String, u64)> {
         let balances = json["meta"][balance_type]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Missing token balances"))?;
@@ -172,7 +172,7 @@ impl OrcaStandardAMM {
                 let amount = balance["uiTokenAmount"]["amount"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing amount in token balance"))?
-                    .parse::<u128>()
+                    .parse::<u64>()
                     .unwrap_or(0);
 
                 if mint == self.token_a_address {
@@ -192,7 +192,7 @@ impl OrcaStandardAMM {
         &self,
         tx_data: &Value,
         pool_address: &str,
-    ) -> Result<(u128, u128)> {
+    ) -> Result<(u64, u64)> {
         let (_, pre_a_amount, _, pre_b_amount) =
             self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let (_, post_a_amount, _, post_b_amount) =
@@ -284,7 +284,7 @@ impl OrcaStandardAMM {
         &self,
         tx_data: &Value,
         pool_address: &str,
-    ) -> Result<(String, String, u128, u128)> {
+    ) -> Result<(String, String, u64, u64)> {
         let (token_a, pre_a, token_b, pre_b) =
             self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let (_, post_a, _, post_b) =

@@ -194,17 +194,17 @@ impl OrcaOptimizedAMM {
         let (amount_in, amount_out) = if is_v2 {
             let transfer0 = payload["transfer0"].as_object().unwrap();
             let transfer1 = payload["transfer1"].as_object().unwrap();
-            
+
             (
                 transfer0["amount"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<u128>()
+                    .parse::<u64>()
                     .unwrap_or(0),
                 transfer1["amount"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<u128>()
+                    .parse::<u64>()
                     .unwrap_or(0),
             )
         } else {
@@ -212,12 +212,12 @@ impl OrcaOptimizedAMM {
                 payload["transferAmount0"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<u128>()
+                    .parse::<u64>()
                     .unwrap_or(0),
                 payload["transferAmount1"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<u128>()
+                    .parse::<u64>()
                     .unwrap_or(0),
             )
         };
@@ -358,13 +358,13 @@ impl OrcaOptimizedAMM {
         let amount_in = payload[amount_in_key]
             .as_str()
             .unwrap_or("0")
-            .parse::<u128>()
+            .parse::<u64>()
             .unwrap_or(0);
 
         let amount_out = payload[amount_out_key]
             .as_str()
             .unwrap_or("0")
-            .parse::<u128>()
+            .parse::<u64>()
             .unwrap_or(0);
 
         let a_to_b = if whirlpool_key == "keyWhirlpoolOne" {
@@ -404,9 +404,9 @@ impl OrcaOptimizedAMM {
         vault_b: &str,
         amount0: &str,
         amount1: &str,
-    ) -> (u128, u128) {
-        let amount0 = amount0.parse::<u128>().unwrap_or(0);
-        let amount1 = amount1.parse::<u128>().unwrap_or(0);
+    ) -> (u64, u64) {
+        let amount0 = amount0.parse::<u64>().unwrap_or(0);
+        let amount1 = amount1.parse::<u64>().unwrap_or(0);
 
         if vault_a == self.token_a_vault {
             (amount0, amount1)

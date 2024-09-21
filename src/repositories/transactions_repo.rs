@@ -211,7 +211,11 @@ impl TransactionRepo {
         .bind(last_tx_id)
         .bind(limit)
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| {
+            eprintln!("SQL Error: {:?}", e);
+            e
+        })?;
 
         rows.into_iter()
             .map(|row| self.row_to_transaction_model(&row))
