@@ -80,7 +80,7 @@ impl TransactionModel {
 
 impl TransactionModelFromDB {
     pub fn transform_to_tx_model(&self) -> TransactionModel {
-        (TransactionModel {
+        TransactionModel {
             signature: self.signature.clone(),
             pool_address: self.pool_address.clone(),
             block_time: self.block_time,
@@ -88,7 +88,7 @@ impl TransactionModelFromDB {
             transaction_type: self.transaction_type.clone(),
             ready_for_backtesting: self.ready_for_backtesting,
             data: self.data.clone(),
-        })
+        }
     }
 }
 

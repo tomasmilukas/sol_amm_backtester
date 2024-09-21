@@ -137,13 +137,13 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     // Sync transactions
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
-    // match amm_service
-    //     .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
-    //     .await
-    // {
-    //     Ok(_f) => println!("Synced transactions successfully"),
-    //     Err(e) => eprintln!("Error syncing transactions: {}", e),
-    // }
+    match amm_service
+        .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
+        .await
+    {
+        Ok(_f) => println!("Synced transactions successfully"),
+        Err(e) => eprintln!("Error syncing transactions: {}", e),
+    }
 
     println!("Transactions synced, time to fill in missing data!");
 
@@ -200,6 +200,8 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     let liquidity_range_arr =
         create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
 
+    println!("Current liquidity range recreated! Time to sync it backwards for the backtester.");
+
     // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
     let (original_starting_liquidity_arr, lowest_tx_id) = sync_backwards(
         &tx_repo,
@@ -209,6 +211,8 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         10_000,
     )
     .await?;
+
+    println!("Sync backwards complete! Time to add position, sync forwards and calculate results!");
 
     let token_a_amount: u128 = config.get_strategy_detail("token_a_amount")?;
     let token_b_amount: u128 = config.get_strategy_detail("token_b_amount")?;
@@ -262,7 +266,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
             lowest_tx_id,
             latest_transaction.unwrap().tx_id,
             &config.pool_address,
-            1000,
+            10_000,
         )
         .await
         .unwrap();

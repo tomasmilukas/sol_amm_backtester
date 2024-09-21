@@ -77,6 +77,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
         liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     };
 
+    println!("PASS HERE");
+
     loop {
         let transactions = transaction_repo
             .fetch_transactions(
@@ -117,23 +119,9 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .to_swap_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                    // reverse decimals and amounts.
-                    // both have to be amount_out since when flipping is_sell we need to pass token_b and is_sell false, then if not is_sell we need to pass token_a (amount_out) as is_sell.
-                    let adjusted_amount = if is_sell {
-                        U256::from(
-                            (swap_data.amount_out
-                                * 10.0f64.powf(pool_model.token_b_decimals as f64))
-                                as u128,
-                        )
-                    } else {
-                        U256::from(
-                            (swap_data.amount_out
-                                * 10.0f64.powf(pool_model.token_a_decimals as f64))
-                                as u128,
-                        )
-                    };
-
-                    liquidity_array.simulate_swap(adjusted_amount, !is_sell)?;
+                    // flip the is_sell
+                    liquidity_array
+                        .simulate_swap(U256::from(swap_data.amount_in as u128), !is_sell)?;
                 }
                 _ => {}
             }

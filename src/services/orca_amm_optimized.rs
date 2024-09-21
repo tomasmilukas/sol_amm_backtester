@@ -190,9 +190,11 @@ impl OrcaOptimizedAMM {
         } else {
             (&self.token_b_address, &self.token_a_address)
         };
+
         let (amount_in, amount_out) = if is_v2 {
             let transfer0 = payload["transfer0"].as_object().unwrap();
             let transfer1 = payload["transfer1"].as_object().unwrap();
+            
             (
                 transfer0["amount"]
                     .as_str()
@@ -219,6 +221,7 @@ impl OrcaOptimizedAMM {
                     .unwrap_or(0.0),
             )
         };
+
         TransactionModel {
             signature: signature.to_string(),
             pool_address: pool_address.to_string(),
@@ -357,6 +360,7 @@ impl OrcaOptimizedAMM {
             .unwrap_or("0")
             .parse::<f64>()
             .unwrap_or(0.0);
+
         let amount_out = payload[amount_out_key]
             .as_str()
             .unwrap_or("0")
@@ -483,6 +487,7 @@ impl AMMService for OrcaOptimizedAMM {
 
             let transaction_models =
                 self.convert_data_to_transactions_model(pool_address, transactions)?;
+
             self.insert_transactions(transaction_models).await?;
 
             // Move to the previous day
