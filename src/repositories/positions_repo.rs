@@ -10,7 +10,7 @@ pub struct PositionsRepo {
 
 #[derive(FromRow)]
 struct PositionRow {
-    id: i64,
+    id: i32,
     address: String,
     pool_address: String,
     liquidity: String,
@@ -36,18 +36,16 @@ impl PositionsRepo {
         position: &PositionModel,
         version: i32,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
-            INSERT INTO positions (
-                address, pool_address, liquidity, tick_lower, tick_upper, version, created_at,
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (address) DO UPDATE SET
-                pool_address = EXCLUDED.pool_address,
-                liquidity = EXCLUDED.liquidity,
-                tick_lower = EXCLUDED.tick_lower,
-                tick_upper = EXCLUDED.tick_upper,
-                version = EXCLUDED.version,
+                INSERT INTO positions (
+                    address, pool_address, liquidity, tick_lower, tick_upper, version
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (address, pool_address, version) DO UPDATE SET
+                    liquidity = EXCLUDED.liquidity,
+                    tick_lower = EXCLUDED.tick_lower,
+                    tick_upper = EXCLUDED.tick_upper
             "#,
         )
         .bind(&position.address)
@@ -56,11 +54,20 @@ impl PositionsRepo {
         .bind(position.tick_lower)
         .bind(position.tick_upper)
         .bind(version)
-        .bind(position.created_at)
         .execute(transaction)
-        .await?;
+        .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("SQL Error: {:?}", e);
+                eprintln!("Error details: {}", e);
+                eprintln!("Position: {:?}", position);
+                eprintln!("Pool address: {}", pool_address);
+                eprintln!("Version: {}", version);
+                Err(e)
+            }
+        }
     }
 
     pub async fn get_positions_by_pool_address_and_version(
@@ -87,7 +94,8 @@ impl PositionsRepo {
         )
         .bind(pool_address)
         .fetch_one(&self.db)
-        .await?;
+        .await
+        .unwrap_or(Some(0));
 
         result.ok_or(sqlx::Error::RowNotFound)
     }

@@ -53,6 +53,7 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             tick_upper INTEGER NOT NULL,
             version INTEGER NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (address, pool_address, version)
         )
         "#,
     ];
