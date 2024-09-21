@@ -39,7 +39,10 @@ impl TransactionsService {
                 .tx_repo
                 .fetch_liquidity_txs_to_update(last_tx_id, batch_size)
                 .await
-                .context("Failed to fetch transactions to update")?;
+                .map_err(|e| {
+                    eprintln!("{}", e); 
+                    anyhow::anyhow!("Failed to fetch transactions to update: {}", e)
+                })?;
 
             if transactions.is_empty() {
                 break; // No more transactions to process
@@ -74,8 +77,6 @@ impl TransactionsService {
                 .await
                 .context("Failed to upsert updated transactions")?;
 
-            println!("Upserted {} transactions", upserted_count);
-
             // Update last_tx_id for the next iteration
             if let Some(last_tx) = updated_transactions.last() {
                 last_tx_id = last_tx.tx_id;
@@ -97,8 +98,8 @@ impl TransactionsService {
         for position_address in &updated_data.possible_positions {
             if let Some(position) = position_map.get(position_address) {
                 // Update tick_lower and tick_upper if the position is found
-                updated_data.tick_lower = Some(position.tick_lower as i32);
-                updated_data.tick_upper = Some(position.tick_upper as i32);
+                updated_data.tick_lower = Some(position.tick_lower);
+                updated_data.tick_upper = Some(position.tick_upper);
                 break; // Assuming we only need to update based on the first matching position
             }
         }

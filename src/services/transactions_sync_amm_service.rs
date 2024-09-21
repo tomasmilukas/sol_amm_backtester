@@ -160,6 +160,7 @@ pub async fn create_amm_service(
                 ));
             }
 
+            // test a random url to see if we can use the optimized path.
             let client = reqwest::Client::new();
             let url = format!(
                 "{}/2024/0821/whirlpool-transaction-20240821.jsonl.gz",
