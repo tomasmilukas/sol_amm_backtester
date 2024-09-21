@@ -40,16 +40,16 @@ pub enum TransactionData {
 pub struct SwapData {
     pub token_in: String,
     pub token_out: String,
-    pub amount_in: f64,
-    pub amount_out: f64,
+    pub amount_in: u128,
+    pub amount_out: u128,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LiquidityData {
     pub token_a: String,
     pub token_b: String,
-    pub amount_a: f64,
-    pub amount_b: f64,
+    pub amount_a: u128,
+    pub amount_b: u128,
     pub liquidity_amount: String,
     pub tick_lower: Option<i32>,
     pub tick_upper: Option<i32>,

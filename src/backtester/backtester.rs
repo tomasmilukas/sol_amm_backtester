@@ -151,21 +151,10 @@ impl Backtest {
                             .to_swap_data()
                             .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                        let is_sell = swap_data.token_in == self.wallet.token_a_addr;
-
-                        // Adjust the amount based on the correct token decimals
-                        let adjusted_amount = if is_sell {
-                            // If selling token A, use token A decimals
-                            swap_data.amount_in as u128
-                                * 10u128.pow(self.wallet.token_a_decimals as u32)
-                        } else {
-                            // If selling token B, use token B decimals
-                            swap_data.amount_in as u128
-                                * 10u128.pow(self.wallet.token_b_decimals as u32)
-                        };
-
-                        self.liquidity_arr
-                            .simulate_swap(U256::from(adjusted_amount), is_sell)?;
+                        self.liquidity_arr.simulate_swap(
+                            U256::from(swap_data.amount_in),
+                            swap_data.token_in == self.wallet.token_a_addr,
+                        )?;
                     }
                     _ => {}
                 }
