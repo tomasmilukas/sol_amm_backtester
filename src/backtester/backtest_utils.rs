@@ -42,17 +42,16 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     transaction_repo: &T,
     mut liquidity_array: LiquidityArray,
     pool_model: PoolModel,
-    latest_transaction: Option<TransactionModelFromDB>,
+    latest_transaction: TransactionModelFromDB,
     batch_size: i64,
 ) -> Result<(LiquidityArray, i64), SyncError> {
     // Initialize the cursor with the latest tx_id
-    let mut cursor = latest_transaction.clone().map(|tx| tx.tx_id);
+    let mut cursor = Some(latest_transaction.tx_id);
 
     // Initialize lowest_tx_id with the maximum possible i64 value
     let mut lowest_tx_id = i64::MAX;
 
     let swap_data = latest_transaction
-        .unwrap()
         .data
         .to_swap_data()
         .map_err(|e| SyncError::DatabaseError(e.to_string()))?
@@ -61,18 +60,12 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     let is_sell = swap_data.token_in == pool_model.token_a_address;
 
     if is_sell {
-        let tick = price_to_tick(
-            swap_data.amount_out / swap_data.amount_in,
-            pool_model.token_a_decimals - pool_model.token_b_decimals,
-        );
+        let tick = price_to_tick(swap_data.amount_out as f64 / swap_data.amount_in as f64);
 
         liquidity_array.current_tick = tick;
         liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     } else {
-        let tick = price_to_tick(
-            swap_data.amount_in / swap_data.amount_out,
-            pool_model.token_a_decimals - pool_model.token_b_decimals,
-        );
+        let tick = price_to_tick(swap_data.amount_in as f64 / swap_data.amount_out as f64);
 
         liquidity_array.current_tick = tick;
         liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
@@ -118,23 +111,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .to_swap_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                    // reverse decimals and amounts.
-                    // both have to be amount_out since when flipping is_sell we need to pass token_b and is_sell false, then if not is_sell we need to pass token_a (amount_out) as is_sell.
-                    let adjusted_amount = if is_sell {
-                        U256::from(
-                            (swap_data.amount_out
-                                * 10.0f64.powf(pool_model.token_b_decimals as f64))
-                                as u128,
-                        )
-                    } else {
-                        U256::from(
-                            (swap_data.amount_out
-                                * 10.0f64.powf(pool_model.token_a_decimals as f64))
-                                as u128,
-                        )
-                    };
-
-                    liquidity_array.simulate_swap(adjusted_amount, !is_sell)?;
+                    // flip the is_sell
+                    liquidity_array.simulate_swap(U256::from(swap_data.amount_in), !is_sell)?;
                 }
                 _ => {}
             }
@@ -204,8 +182,11 @@ mod tests {
                 data: TransactionData::Swap(SwapData {
                     token_in: "TokenAAddress".to_string(),
                     token_out: "TokenBAddress".to_string(),
-                    amount_in: 5.301077056,
-                    amount_out: 718.793826,
+                    // real prices (stuff below has to INCLUDE decimals):
+                    // amount_in: 5.301077056,
+                    // amount_out: 718.793826,
+                    amount_in: 5301077056,
+                    amount_out: 718793826,
                 }),
             }],
         };
@@ -222,7 +203,6 @@ mod tests {
             token_a_decimals: 9,
             token_b_decimals: 6,
             tick_spacing: 1,
-            total_liquidity: Some("".to_string()),
             fee_rate: 300, // 0.03%
             last_updated_at: Utc::now(),
         };
@@ -273,7 +253,7 @@ mod tests {
             &mock_repo_1,
             initial_liquidity_array,
             pool_model.clone(),
-            Some(TransactionModelFromDB {
+            TransactionModelFromDB {
                 tx_id: 1,
                 signature: "sig1".to_string(),
                 pool_address: "pool1".to_string(),
@@ -285,10 +265,13 @@ mod tests {
                     token_in: "TokenAAddress".to_string(),
                     token_out: "TokenBAddress".to_string(),
                     // THIS CORRESPONDS TO TICK -19969. DONT TOUCH
-                    amount_in: 5.301077056,
-                    amount_out: 718.793826,
+                    // real nmrs (below has to be decimal included):
+                    // amount_in: 5.301077056,
+                    // amount_out: 718.793826,
+                    amount_in: 5301077056,
+                    amount_out: 718793826,
                 }),
-            }),
+            },
             10,
         )
         .await;
@@ -296,6 +279,8 @@ mod tests {
         assert!(result_1.is_ok(), "sync_backwards should succeed");
 
         let final_liquidity_array = result_1.unwrap().0;
+        let new_curr_sqrt_price = final_liquidity_array.current_sqrt_price;
+        let new_curr_tick = final_liquidity_array.current_tick;
 
         assert!(
             final_liquidity_array.current_tick >= starting_tick,
@@ -319,8 +304,11 @@ mod tests {
                     token_in: "TokenBAddress".to_string(),
                     token_out: "TokenAAddress".to_string(),
                     // MUST CORRESPOND TO TICK (-19959) since thats where it ended last time. the PRICE is 135.904
-                    amount_in: 4.0 * 135.904,
-                    amount_out: 4.0,
+                    // real price (below has to be real code):
+                    // amount_in: 4.0 * 135.904,
+                    // amount_out: 4.0,
+                    amount_in: 4 * 135904 * 10_u64.pow(6) / 1000, // the 1000 to normalize the price to 135.904
+                    amount_out: 4 * 10_u64.pow(9),
                 }),
             }],
         };
@@ -329,7 +317,7 @@ mod tests {
             &mock_repo_2,
             final_liquidity_array,
             pool_model,
-            Some(TransactionModelFromDB {
+            TransactionModelFromDB {
                 tx_id: 1,
                 signature: "sig1".to_string(),
                 pool_address: "pool1".to_string(),
@@ -341,21 +329,25 @@ mod tests {
                     token_in: "TokenBAddress".to_string(),
                     token_out: "TokenAAddress".to_string(),
                     // MUST CORRESPOND TO TICK (-19959) since thats where it ended last time. the PRICE is 135.904
-                    amount_in: 135.904,
-                    amount_out: 1.0,
+                    // real price (below has to be real code):
+                    // amount_in: 1.0 * 135.904,
+                    // amount_out: 1.0,
+                    amount_in: 135904 * 10_u64.pow(6) / 1000, // the 1000 to normalize the price to 135.904
+                    amount_out: 1 * 10_u64.pow(9),
                 }),
-            }),
+            },
             10,
         )
         .await;
+
         let final_liquidity_array_2 = result_2.unwrap().0;
 
         assert!(
-            final_liquidity_array_2.current_tick <= starting_tick,
+            final_liquidity_array_2.current_tick <= new_curr_tick,
             "The BUY reversed transaction (ie sell) should have decreased the tick."
         );
         assert!(
-            final_liquidity_array_2.current_sqrt_price < starting_sqrt_price_u256,
+            final_liquidity_array_2.current_sqrt_price < new_curr_sqrt_price,
             "The BUY reversed transaction (ie sell) should have decreased the sqrtPrice."
         );
 

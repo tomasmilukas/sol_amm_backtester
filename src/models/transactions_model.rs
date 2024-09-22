@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -40,16 +40,18 @@ pub enum TransactionData {
 pub struct SwapData {
     pub token_in: String,
     pub token_out: String,
-    pub amount_in: f64,
-    pub amount_out: f64,
+    // DB only supports up to 2^64
+    pub amount_in: u64,
+    pub amount_out: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LiquidityData {
     pub token_a: String,
     pub token_b: String,
-    pub amount_a: f64,
-    pub amount_b: f64,
+    // DB only supports up to 2^64
+    pub amount_a: u64,
+    pub amount_b: u64,
     pub liquidity_amount: String,
     pub tick_lower: Option<i32>,
     pub tick_upper: Option<i32>,
@@ -80,7 +82,7 @@ impl TransactionModel {
 
 impl TransactionModelFromDB {
     pub fn transform_to_tx_model(&self) -> TransactionModel {
-        (TransactionModel {
+        TransactionModel {
             signature: self.signature.clone(),
             pool_address: self.pool_address.clone(),
             block_time: self.block_time,
@@ -88,7 +90,7 @@ impl TransactionModelFromDB {
             transaction_type: self.transaction_type.clone(),
             ready_for_backtesting: self.ready_for_backtesting,
             data: self.data.clone(),
-        })
+        }
     }
 }
 

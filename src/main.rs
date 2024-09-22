@@ -25,11 +25,7 @@ use backtester::{
     no_rebalance_strategy::NoRebalanceStrategy,
     simple_rebalance_strategy::SimpleRebalanceStrategy,
 };
-// use backtester::{
-//     backtest_utils::{create_full_liquidity_range, sync_backwards},
-//     backtester::{Backtest, Strategy, Wallet},
-//     simple_rebalance_strategy::SimpleRebalanceStrategy,
-// };
+
 use chrono::{Duration, Utc};
 use config::{AppConfig, StrategyType};
 use dotenv::dotenv;
@@ -104,7 +100,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
 
     let positions_repo = PositionsRepo::new(pool.clone());
     let positions_api = PositionsApi::new()?;
-    let positions_service = PositionsService::new(positions_repo.clone(), pool_repo, positions_api);
+    let positions_service = PositionsService::new(positions_repo.clone(), positions_api);
 
     match positions_service
         .fetch_and_store_positions_data(&config.pool_address)
@@ -149,8 +145,6 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
         Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
 
-    println!("Transactions synced, time to fill in missing data!");
-
     // Update transactions since not all data can be retrieved during sync. Updates will happen using position_data, to fill in liquidity info.
     let transactions_service = TransactionsService::new(tx_repo, positions_repo);
 
@@ -158,7 +152,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
         .update_and_fill_transactions(&config.pool_address)
         .await
     {
-        Ok(_f) => println!("Updated txs successfully"),
+        Ok(_) => println!("Updated txs successfully"),
         Err(e) => eprintln!("Error updating txs: {}", e),
     }
 
@@ -183,11 +177,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
 
     let positions_repo = PositionsRepo::new(pool.clone());
     let positions_api = PositionsApi::new()?;
-    let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
-
-    let positions_data = positions_service
-        .get_position_data(&config.pool_address)
-        .await?;
+    let positions_service = PositionsService::new(positions_repo, positions_api);
 
     let tx_repo = TransactionRepo::new(pool);
 
@@ -196,24 +186,39 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         .await
         .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
+    let (positions_data, tx_to_sync_from) = positions_service
+        .get_position_data_for_transaction(
+            tx_repo.clone(),
+            &config.pool_address,
+            latest_transaction.clone().unwrap(),
+        )
+        .await?;
+
     // Create the liquidity range "at present" from db.
     let liquidity_range_arr =
         create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
+
+    println!("Current liquidity range recreated! Time to sync it backwards for the backtester.");
 
     // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
     let (original_starting_liquidity_arr, lowest_tx_id) = sync_backwards(
         &tx_repo,
         liquidity_range_arr,
         pool_data.clone(),
-        latest_transaction.clone(),
+        tx_to_sync_from,
         10_000,
     )
     .await?;
 
+    println!("Sync backwards complete! Time to add position, sync forwards and calculate results!");
+
+    let token_a_amount: u128 = config.get_strategy_detail("token_a_amount")?;
+    let token_b_amount: u128 = config.get_strategy_detail("token_b_amount")?;
+
     let amount_token_a =
-        U256::from(config.token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32));
+        U256::from(token_a_amount * 10_u128.pow(pool_data.token_a_decimals as u32));
     let amount_token_b =
-        U256::from(config.token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32));
+        U256::from(token_b_amount * 10_u128.pow(pool_data.token_b_decimals as u32));
 
     let wallet = Wallet {
         token_a_addr: pool_data.token_a_address,
@@ -259,7 +264,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
             lowest_tx_id,
             latest_transaction.unwrap().tx_id,
             &config.pool_address,
-            1000,
+            10_000,
         )
         .await
         .unwrap();
