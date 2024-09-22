@@ -3,7 +3,7 @@ use std::time::Duration as stdDuration;
 
 use crate::api::transactions_api::TransactionApi;
 use crate::models::transactions_model::{
-    LiquidityData, SwapData, TransactionData, TransactionModel,
+    ClosePositionData, LiquidityData, SwapData, TransactionData, TransactionModel,
 };
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_sync_amm_service::AMMService;
@@ -166,6 +166,17 @@ impl OrcaOptimizedAMM {
                     "twoHopSwap" => {
                         self.convert_two_hop_swap(pool_address, &signature, instruction, block_time)
                     }
+                    "closePosition" => Some(TransactionModel {
+                        signature: signature.to_string(),
+                        pool_address: pool_address.to_string(),
+                        block_time,
+                        block_time_utc: Utc.timestamp_opt(block_time, 0).unwrap(),
+                        transaction_type: "Swap".to_string(),
+                        ready_for_backtesting: true,
+                        data: TransactionData::ClosePosition(ClosePositionData {
+                            position_address: instruction["keyPosition"].to_string(),
+                        }),
+                    }),
                     _ => None,
                 };
             }
@@ -285,7 +296,7 @@ impl OrcaOptimizedAMM {
                     liquidity_amount,
                     tick_lower: None,
                     tick_upper: None,
-                    possible_positions: vec![position],
+                    position_address: position,
                 })
             } else {
                 TransactionData::DecreaseLiquidity(LiquidityData {
@@ -296,7 +307,7 @@ impl OrcaOptimizedAMM {
                     liquidity_amount,
                     tick_lower: None,
                     tick_upper: None,
-                    possible_positions: vec![position],
+                    position_address: position,
                 })
             },
         }
