@@ -114,18 +114,20 @@ impl HawksightParser {
             })
             .ok_or_else(|| anyhow!("Price numerator not found in logs"))?;
 
-        // price numerator always in terms of token a.
-        let price = (price_numerator as f64) / 10f64.powi(pool_info.decimals_a as i32);
+        // price numerator always in terms of token a (incl decimals)
+        // swap_data.amount is always amount in (either token a or b)
 
         // we check the path of a to b and calculate the correct amountin/amountout
         let (amount_in, amount_out) = if swap_data.a_to_b {
-            let amount_a = swap_data.amount as f64 / 10f64.powi(pool_info.decimals_a as i32);
-            let amount_b = amount_a * price;
-            (amount_a, amount_b)
+            let amount_b = (swap_data.amount as u64 * price_numerator as u64)
+                / 10_u64.pow(pool_info.decimals_a as u32);
+
+            (swap_data.amount as u64, amount_b)
         } else {
-            let amount_b = swap_data.amount as f64 / 10f64.powi(pool_info.decimals_b as i32);
-            let amount_a = amount_b / price;
-            (amount_b, amount_a)
+            let amount_a = (swap_data.amount as u64 * 10_u64.pow(pool_info.decimals_a as u32))
+                / price_numerator as u64;
+
+            (swap_data.amount as u64, amount_a)
         };
 
         let (token_in, token_out) = if swap_data.a_to_b {
@@ -147,8 +149,8 @@ impl HawksightParser {
         pool_info: &PoolInfo,
         account_keys: Vec<String>,
     ) -> Result<LiquidityData> {
-        let mut amount_a = 0.0;
-        let mut amount_b = 0.0;
+        let mut amount_a = 0;
+        let mut amount_b = 0;
 
         let mut tick_lower: Option<i32> = Some(0);
         let mut tick_upper: Option<i32> = Some(0);
@@ -159,11 +161,13 @@ impl HawksightParser {
             if message.starts_with("Program log: Will deposit: ") {
                 let parts: Vec<&str> = message.split_whitespace().collect();
                 if parts.len() >= 6 {
-                    let amount: f64 = parts[4].parse().unwrap_or(0.0);
-                    if amount_a == 0.0 {
-                        amount_a = amount / 10f64.powi(pool_info.decimals_a as i32);
+                    let amount: u64 = parts[4].parse().unwrap_or(0);
+
+                    // since amount_a is always parsed first, we update that one.
+                    if amount_a == 0 {
+                        amount_a = amount;
                     } else {
-                        amount_b = amount / 10f64.powi(pool_info.decimals_b as i32);
+                        amount_b = amount;
                     }
                 }
             } else if message.starts_with("Program log: Tick lower index: ") {
@@ -190,7 +194,7 @@ impl HawksightParser {
             }
         }
 
-        if amount_a == 0.0 || amount_b == 0.0 {
+        if amount_a == 0 || amount_b == 0 {
             return Err(anyhow!("Failed to extract liquidity data from logs"));
         }
 
@@ -296,6 +300,7 @@ mod tests {
             .iter()
             .find(|t| t.transaction_type == "Swap")
             .unwrap();
+
         if let TransactionData::Swap(swap_data) = &swap_transaction.data {
             assert_eq!(
                 swap_data.token_out,
@@ -305,6 +310,9 @@ mod tests {
                 swap_data.token_in,
                 "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
             );
+
+            assert_eq!(swap_data.amount_in, 118566);
+            assert_eq!(swap_data.amount_out, 921);
         } else {
             panic!("Expected Swap data");
         }

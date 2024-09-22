@@ -148,13 +148,13 @@ impl OrcaStandardAMM {
         json: &Value,
         balance_type: &str,
         pool_address: &str,
-    ) -> Result<(String, f64, String, f64)> {
+    ) -> Result<(String, u64, String, u64)> {
         let balances = json["meta"][balance_type]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Missing token balances"))?;
 
-        let mut token_a_amount = 0.0;
-        let mut token_b_amount = 0.0;
+        let mut token_a_amount = 0;
+        let mut token_b_amount = 0;
         let mut token_a_mint = String::new();
         let mut token_b_mint = String::new();
 
@@ -169,16 +169,11 @@ impl OrcaStandardAMM {
                     .ok_or_else(|| anyhow::anyhow!("Missing mint in token balance"))?
                     .to_string();
 
-                let amount = balance["uiTokenAmount"]["uiAmount"]
-                    .as_f64()
-                    .or_else(|| {
-                        balance["uiTokenAmount"]["uiAmountString"]
-                            .as_str()
-                            .and_then(|s| s.parse::<f64>().ok())
-                    })
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Missing or invalid uiAmount in token balance")
-                    })?;
+                let amount = balance["uiTokenAmount"]["amount"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing amount in token balance"))?
+                    .parse::<u64>()
+                    .unwrap_or(0);
 
                 if mint == self.token_a_address {
                     token_a_amount = amount;
@@ -193,16 +188,20 @@ impl OrcaStandardAMM {
         Ok((token_a_mint, token_a_amount, token_b_mint, token_b_amount))
     }
 
-    fn extract_liquidity_amounts(&self, tx_data: &Value, pool_address: &str) -> Result<(f64, f64)> {
+    fn extract_liquidity_amounts(
+        &self,
+        tx_data: &Value,
+        pool_address: &str,
+    ) -> Result<(u64, u64)> {
         let (_, pre_a_amount, _, pre_b_amount) =
             self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let (_, post_a_amount, _, post_b_amount) =
             self.get_token_balances(tx_data, "postTokenBalances", pool_address)?;
 
-        let amount_a = post_a_amount - pre_a_amount;
-        let amount_b = post_b_amount - pre_b_amount;
+        let amount_a = post_a_amount.abs_diff(pre_a_amount);
+        let amount_b = post_b_amount.abs_diff(pre_b_amount);
 
-        Ok((amount_a.abs(), amount_b.abs()))
+        Ok((amount_a, amount_b))
     }
 
     fn convert_liquidity_data(
@@ -285,7 +284,7 @@ impl OrcaStandardAMM {
         &self,
         tx_data: &Value,
         pool_address: &str,
-    ) -> Result<(String, String, f64, f64)> {
+    ) -> Result<(String, String, u64, u64)> {
         let (token_a, pre_a, token_b, pre_b) =
             self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let (_, post_a, _, post_b) =
@@ -296,14 +295,6 @@ impl OrcaStandardAMM {
         } else {
             (token_b, token_a, pre_b - post_b, post_a - pre_a)
         };
-
-        if amount_in <= 0.0 || amount_out <= 0.0 {
-            return Err(anyhow::anyhow!(
-                "Invalid swap amounts: in = {}, out = {}",
-                amount_in,
-                amount_out
-            ));
-        }
 
         Ok((token_in, token_out, amount_in, amount_out))
     }

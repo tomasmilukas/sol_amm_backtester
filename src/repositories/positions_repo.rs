@@ -10,13 +10,14 @@ pub struct PositionsRepo {
 
 #[derive(FromRow)]
 struct PositionRow {
+    id: i32,
     address: String,
     pool_address: String,
     liquidity: String,
     tick_lower: i32,
     tick_upper: i32,
+    version: i32,
     created_at: DateTime<Utc>,
-    last_updated_at: DateTime<Utc>,
 }
 
 impl PositionsRepo {
@@ -33,19 +34,18 @@ impl PositionsRepo {
         transaction: &mut Transaction<'a, Postgres>,
         pool_address: &str,
         position: &PositionModel,
+        version: i32,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
-            INSERT INTO positions (
-                address, pool_address, liquidity, tick_lower, tick_upper, created_at, last_updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (address) DO UPDATE SET
-                pool_address = EXCLUDED.pool_address,
-                liquidity = EXCLUDED.liquidity,
-                tick_lower = EXCLUDED.tick_lower,
-                tick_upper = EXCLUDED.tick_upper,
-                last_updated_at = NOW()
+                INSERT INTO positions (
+                    address, pool_address, liquidity, tick_lower, tick_upper, version
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (address, pool_address, version) DO UPDATE SET
+                    liquidity = EXCLUDED.liquidity,
+                    tick_lower = EXCLUDED.tick_lower,
+                    tick_upper = EXCLUDED.tick_upper
             "#,
         )
         .bind(&position.address)
@@ -53,36 +53,51 @@ impl PositionsRepo {
         .bind(position.liquidity.to_string())
         .bind(position.tick_lower)
         .bind(position.tick_upper)
-        .bind(position.created_at)
-        .bind(position.last_updated_at)
+        .bind(version)
         .execute(transaction)
-        .await?;
+        .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("SQL Error: {:?}", e);
+                eprintln!("Error details: {}", e);
+                eprintln!("Position: {:?}", position);
+                eprintln!("Pool address: {}", pool_address);
+                eprintln!("Version: {}", version);
+                Err(e)
+            }
+        }
     }
 
-    pub async fn get_position_by_address(
-        &self,
-        address: &str,
-    ) -> Result<Option<PositionModel>, sqlx::Error> {
-        let row: Option<PositionRow> = query_as("SELECT * FROM positions WHERE address = $1")
-            .bind(address)
-            .fetch_optional(&self.db)
-            .await?;
-
-        row.map(|r| self.row_to_model(r)).transpose()
-    }
-
-    pub async fn get_positions_by_pool_address(
+    pub async fn get_positions_by_pool_address_and_version(
         &self,
         pool_address: &str,
+        version: i32,
     ) -> Result<Vec<PositionModel>, sqlx::Error> {
-        let rows: Vec<PositionRow> = query_as("SELECT * FROM positions WHERE pool_address = $1")
-            .bind(pool_address)
-            .fetch_all(&self.db)
-            .await?;
+        let rows: Vec<PositionRow> =
+            sqlx::query_as("SELECT * FROM positions WHERE pool_address = $1 AND version = $2")
+                .bind(pool_address)
+                .bind(version)
+                .fetch_all(&self.db)
+                .await?;
 
         rows.into_iter().map(|r| self.row_to_model(r)).collect()
+    }
+
+    pub async fn get_latest_version_for_pool(
+        &self,
+        pool_address: &str,
+    ) -> Result<i32, sqlx::Error> {
+        let result: Option<i32> = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(version), 0) FROM positions WHERE pool_address = $1",
+        )
+        .bind(pool_address)
+        .fetch_one(&self.db)
+        .await
+        .unwrap_or(Some(0));
+
+        result.ok_or(sqlx::Error::RowNotFound)
     }
 
     fn row_to_model(&self, row: PositionRow) -> Result<PositionModel, sqlx::Error> {
@@ -95,7 +110,6 @@ impl PositionsRepo {
             tick_lower: row.tick_lower,
             tick_upper: row.tick_upper,
             created_at: row.created_at,
-            last_updated_at: row.last_updated_at,
         })
     }
 }

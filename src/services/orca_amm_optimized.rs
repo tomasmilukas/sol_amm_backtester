@@ -190,35 +190,38 @@ impl OrcaOptimizedAMM {
         } else {
             (&self.token_b_address, &self.token_a_address)
         };
+
         let (amount_in, amount_out) = if is_v2 {
             let transfer0 = payload["transfer0"].as_object().unwrap();
             let transfer1 = payload["transfer1"].as_object().unwrap();
+
             (
                 transfer0["amount"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<f64>()
-                    .unwrap_or(0.0),
+                    .parse::<u64>()
+                    .unwrap_or(0),
                 transfer1["amount"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<f64>()
-                    .unwrap_or(0.0),
+                    .parse::<u64>()
+                    .unwrap_or(0),
             )
         } else {
             (
                 payload["transferAmount0"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<f64>()
-                    .unwrap_or(0.0),
+                    .parse::<u64>()
+                    .unwrap_or(0),
                 payload["transferAmount1"]
                     .as_str()
                     .unwrap_or("0")
-                    .parse::<f64>()
-                    .unwrap_or(0.0),
+                    .parse::<u64>()
+                    .unwrap_or(0),
             )
         };
+
         TransactionModel {
             signature: signature.to_string(),
             pool_address: pool_address.to_string(),
@@ -355,13 +358,14 @@ impl OrcaOptimizedAMM {
         let amount_in = payload[amount_in_key]
             .as_str()
             .unwrap_or("0")
-            .parse::<f64>()
-            .unwrap_or(0.0);
+            .parse::<u64>()
+            .unwrap_or(0);
+
         let amount_out = payload[amount_out_key]
             .as_str()
             .unwrap_or("0")
-            .parse::<f64>()
-            .unwrap_or(0.0);
+            .parse::<u64>()
+            .unwrap_or(0);
 
         let a_to_b = if whirlpool_key == "keyWhirlpoolOne" {
             payload["dataAToBOne"].as_i64().unwrap_or(0) == 1
@@ -400,9 +404,9 @@ impl OrcaOptimizedAMM {
         vault_b: &str,
         amount0: &str,
         amount1: &str,
-    ) -> (f64, f64) {
-        let amount0 = amount0.parse::<f64>().unwrap_or(0.0);
-        let amount1 = amount1.parse::<f64>().unwrap_or(0.0);
+    ) -> (u64, u64) {
+        let amount0 = amount0.parse::<u64>().unwrap_or(0);
+        let amount1 = amount1.parse::<u64>().unwrap_or(0);
 
         if vault_a == self.token_a_vault {
             (amount0, amount1)
@@ -483,6 +487,7 @@ impl AMMService for OrcaOptimizedAMM {
 
             let transaction_models =
                 self.convert_data_to_transactions_model(pool_address, transactions)?;
+
             self.insert_transactions(transaction_models).await?;
 
             // Move to the previous day

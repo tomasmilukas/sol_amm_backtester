@@ -14,11 +14,8 @@ pub fn tick_to_sqrt_price_u256(tick: i32) -> U256 {
 }
 
 // WORKS GREAT. DO NOT TOUCH. ACCURATE. TESTED AGAINST LIVE SWAPS.
-pub fn price_to_tick(price: f64, decimal_diff: i16) -> i32 {
-    // Step 1: Convert price to sqrtPrice
-    let sqrt_price = (price / 10_f64.powf(decimal_diff as f64)).sqrt();
-
-    let numerator = sqrt_price.ln();
+pub fn price_to_tick(price: f64) -> i32 {
+    let numerator = price.sqrt().ln();
     let denominator = 1.0001f64.ln();
 
     (2.0 * numerator / denominator).floor() as i32
@@ -231,13 +228,16 @@ mod tests {
     #[test]
     fn test_sqrt_price_to_tick() {
         // SOL_USDC
-        assert_eq!(price_to_tick(133.446536f64, 3), -20142);
+        // the nmr is adjusted with decimal diff, since thats how it works when u divide the amounts. SOL real price is 133.44....
+        assert_eq!(price_to_tick(0.133446536f64), -20142);
 
         // SOL/POPCAT
-        assert_eq!(price_to_tick(206.071016394f64, 0), 53284);
+        // 0 token decimal adjustment
+        assert_eq!(price_to_tick(206.071016394f64), 53284);
 
         // SOL/WIF
-        assert_eq!(price_to_tick(86.719236f64, 3), -24453);
+        //3 decimal adjustment, real price is 86.7....
+        assert_eq!(price_to_tick(0.086719236f64), -24453);
     }
 
     #[test]
