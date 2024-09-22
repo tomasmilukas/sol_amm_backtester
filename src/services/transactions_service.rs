@@ -58,14 +58,17 @@ impl TransactionsService {
                             return tx; // Skip this transaction since it's not a liquidity transaction
                         }
                     };
-                    println!("FULL TX INFO: {:?}", tx);
 
-                    tx.data = self.update_transaction_data(
-                        liquidity_data,
-                        &position_map,
-                        &tx.transaction_type,
-                    );
+                    let mut updated_data = liquidity_data.clone();
 
+                    if let Some(position) = position_map.get(&liquidity_data.position_address) {
+                        // Update tick_lower and tick_upper if the position is found
+                        updated_data.tick_lower = Some(position.tick_lower);
+                        updated_data.tick_upper = Some(position.tick_upper);
+                    }
+
+                    // Convert the updated data into TransactionData
+                    tx.data = updated_data.into_transaction_data(&tx.transaction_type);
                     tx.ready_for_backtesting = false;
                     tx
                 })
@@ -96,14 +99,10 @@ impl TransactionsService {
     ) -> TransactionData {
         let mut updated_data = data.clone();
 
-        // Check if any of the possible_positions exist in the HashMap
-        for position_address in &updated_data.possible_positions {
-            if let Some(position) = position_map.get(position_address) {
-                // Update tick_lower and tick_upper if the position is found
-                updated_data.tick_lower = Some(position.tick_lower);
-                updated_data.tick_upper = Some(position.tick_upper);
-                break; // Assuming we only need to update based on the first matching position
-            }
+        if let Some(position) = position_map.get(&data.position_address) {
+            // Update tick_lower and tick_upper if the position is found
+            updated_data.tick_lower = Some(position.tick_lower);
+            updated_data.tick_upper = Some(position.tick_upper);
         }
 
         // Convert the updated data into TransactionData

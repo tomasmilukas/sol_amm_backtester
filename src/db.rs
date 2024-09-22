@@ -56,6 +56,19 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
             UNIQUE (address, pool_address, version)
         )
         "#,
+
+        r#"
+        CREATE TABLE IF NOT EXISTS closed_positions (
+            id SERIAL PRIMARY KEY,
+            address TEXT NOT NULL,
+            pool_address TEXT NOT NULL REFERENCES pools(address),
+            tick_lower INTEGER NOT NULL,
+            tick_upper INTEGER NOT NULL,
+            position_created_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (address, pool_address)
+        )
+        "#,
     ];
 
     for statement in statements.iter() {

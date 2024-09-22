@@ -1,6 +1,6 @@
 use crate::api::transactions_api::{SignatureInfo, TransactionApi};
 use crate::models::transactions_model::{
-    LiquidityData, SwapData, TransactionData, TransactionModel,
+    ClosePositionData, LiquidityData, SwapData, TransactionData, TransactionModel,
 };
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_sync_amm_service::{constants, AMMService};
@@ -109,6 +109,8 @@ impl OrcaStandardAMM {
                 return Ok("DecreaseLiquidity".to_string());
             } else if message.contains("Instruction: DecreaseLiquidityV2") {
                 return Ok("DecreaseLiquidityV2".to_string());
+            } else if message.contains("Instruction: ClosePosition") {
+                return Ok("ClosePosition".to_string());
             }
         }
 
@@ -188,11 +190,7 @@ impl OrcaStandardAMM {
         Ok((token_a_mint, token_a_amount, token_b_mint, token_b_amount))
     }
 
-    fn extract_liquidity_amounts(
-        &self,
-        tx_data: &Value,
-        pool_address: &str,
-    ) -> Result<(u64, u64)> {
+    fn extract_liquidity_amounts(&self, tx_data: &Value, pool_address: &str) -> Result<(u64, u64)> {
         let (_, pre_a_amount, _, pre_b_amount) =
             self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let (_, post_a_amount, _, post_b_amount) =
@@ -235,7 +233,8 @@ impl OrcaStandardAMM {
                         liquidity_amount: decoded.liquidity_amount.to_string(),
                         tick_lower: None,
                         tick_upper: None,
-                        possible_positions: common_data.account_keys,
+                        // on regular orca transactions, the position is always in the 4th position. For OTHER platforms on top of orca (like hawsight) will have diff positions.
+                        position_address: common_data.account_keys[3].clone(),
                     })
                 }
                 "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
@@ -251,9 +250,14 @@ impl OrcaStandardAMM {
                         liquidity_amount: decoded.liquidity_amount.to_string(),
                         tick_lower: None,
                         tick_upper: None,
-                        possible_positions: common_data.account_keys,
+                        // on regular orca transactions, the position is always in the 4th position. For OTHER platforms on top of orca (like hawsight) will have diff positions.
+                        position_address: common_data.account_keys[3].clone(),
                     })
                 }
+                "ClosePosition" => TransactionData::ClosePosition(ClosePositionData {
+                    // on regular orca transactions, the position is always in the 4th position.
+                    position_address: common_data.account_keys[3].clone(),
+                }),
                 _ => return Err(anyhow::anyhow!("Unexpected transaction type")),
             },
         })

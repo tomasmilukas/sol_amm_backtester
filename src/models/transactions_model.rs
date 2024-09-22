@@ -34,6 +34,7 @@ pub enum TransactionData {
     Swap(SwapData),
     IncreaseLiquidity(LiquidityData),
     DecreaseLiquidity(LiquidityData),
+    ClosePosition(ClosePositionData),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -55,7 +56,12 @@ pub struct LiquidityData {
     pub liquidity_amount: String,
     pub tick_lower: Option<i32>,
     pub tick_upper: Option<i32>,
-    pub possible_positions: Vec<String>,
+    pub position_address: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClosePositionData {
+    pub position_address: String,
 }
 
 impl TransactionModel {
