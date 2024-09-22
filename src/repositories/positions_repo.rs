@@ -1,4 +1,4 @@
-use crate::models::positions_model::PositionModel;
+use crate::models::positions_model::LivePositionModel;
 use chrono::{DateTime, Utc};
 use sqlx::{prelude::FromRow, query_as, Pool, Postgres, Transaction};
 use std::str::FromStr;
@@ -9,7 +9,7 @@ pub struct PositionsRepo {
 }
 
 #[derive(FromRow)]
-struct PositionRow {
+struct LivePositionRow {
     id: i32,
     address: String,
     pool_address: String,
@@ -33,12 +33,12 @@ impl PositionsRepo {
         &self,
         transaction: &mut Transaction<'a, Postgres>,
         pool_address: &str,
-        position: &PositionModel,
+        position: &LivePositionModel,
         version: i32,
     ) -> Result<(), sqlx::Error> {
         let result = sqlx::query(
             r#"
-                INSERT INTO positions (
+                INSERT INTO live_positions (
                     address, pool_address, liquidity, tick_lower, tick_upper, version
                 )
                 VALUES ($1, $2, $3, $4, $5, $6)
@@ -70,13 +70,13 @@ impl PositionsRepo {
         }
     }
 
-    pub async fn get_positions_by_pool_address_and_version(
+    pub async fn get_live_positions_by_pool_address_and_version(
         &self,
         pool_address: &str,
         version: i32,
-    ) -> Result<Vec<PositionModel>, sqlx::Error> {
-        let rows: Vec<PositionRow> =
-            sqlx::query_as("SELECT * FROM positions WHERE pool_address = $1 AND version = $2")
+    ) -> Result<Vec<LivePositionModel>, sqlx::Error> {
+        let rows: Vec<LivePositionRow> =
+            sqlx::query_as("SELECT * FROM live_positions WHERE pool_address = $1 AND version = $2")
                 .bind(pool_address)
                 .bind(version)
                 .fetch_all(&self.db)
@@ -85,12 +85,12 @@ impl PositionsRepo {
         rows.into_iter().map(|r| self.row_to_model(r)).collect()
     }
 
-    pub async fn get_latest_version_for_pool(
+    pub async fn get_latest_version_for_live_pool(
         &self,
         pool_address: &str,
     ) -> Result<i32, sqlx::Error> {
         let result: Option<i32> = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(version), 0) FROM positions WHERE pool_address = $1",
+            "SELECT COALESCE(MAX(version), 0) FROM live_positions WHERE pool_address = $1",
         )
         .bind(pool_address)
         .fetch_one(&self.db)
@@ -100,11 +100,11 @@ impl PositionsRepo {
         result.ok_or(sqlx::Error::RowNotFound)
     }
 
-    fn row_to_model(&self, row: PositionRow) -> Result<PositionModel, sqlx::Error> {
+    fn row_to_model(&self, row: LivePositionRow) -> Result<LivePositionModel, sqlx::Error> {
         let liquidity =
             u128::from_str(&row.liquidity).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
 
-        Ok(PositionModel {
+        Ok(LivePositionModel {
             address: row.address,
             liquidity,
             tick_lower: row.tick_lower,

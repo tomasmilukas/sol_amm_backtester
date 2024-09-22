@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::models::positions_model::PositionModel;
+use crate::models::positions_model::LivePositionModel;
 use crate::models::transactions_model::{LiquidityData, TransactionData, TransactionModelFromDB};
 use crate::repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use anyhow::{Context, Result};
@@ -22,14 +22,14 @@ impl TransactionsService {
         // any version works, so we pick the first one, since we just need the tick data.
         let position_data = self
             .positions_repo
-            .get_positions_by_pool_address_and_version(pool_address, 1)
+            .get_live_positions_by_pool_address_and_version(pool_address, 1)
             .await
             .context("Failed to get positions by pool address")?;
 
         let mut last_tx_id = 0;
         let batch_size = 5000;
 
-        let position_map: HashMap<String, PositionModel> = position_data
+        let position_map: HashMap<String, LivePositionModel> = position_data
             .iter()
             .map(|p| (p.address.clone(), p.clone()))
             .collect();
@@ -91,7 +91,7 @@ impl TransactionsService {
     pub fn update_transaction_data(
         &self,
         data: &LiquidityData,
-        position_map: &HashMap<String, PositionModel>,
+        position_map: &HashMap<String, LivePositionModel>,
         transaction_type: &String,
     ) -> TransactionData {
         let mut updated_data = data.clone();

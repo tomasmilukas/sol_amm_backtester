@@ -187,7 +187,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
     let (positions_data, tx_to_sync_from) = positions_service
-        .get_position_data_for_transaction(
+        .get_live_position_data_for_transaction(
             tx_repo.clone(),
             &config.pool_address,
             latest_transaction.clone().unwrap(),
