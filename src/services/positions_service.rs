@@ -1,4 +1,4 @@
-use crate::models::positions_model::PositionModel;
+use crate::models::positions_model::LivePositionModel;
 use crate::models::transactions_model::TransactionModelFromDB;
 use crate::repositories::positions_repo::PositionsRepo;
 use crate::{api::positions_api::PositionsApi, repositories::transactions_repo::TransactionRepo};
@@ -27,7 +27,7 @@ impl PositionsService {
         // Get the latest version for the pool and increment it
         let latest_version = self
             .positions_repo
-            .get_latest_version_for_pool(pool_address)
+            .get_latest_version_for_live_pool(pool_address)
             .await
             .context("Failed to get latest version for pool")?;
         let new_version = latest_version + 1;
@@ -56,15 +56,15 @@ impl PositionsService {
         Ok(())
     }
 
-    pub async fn get_position_data_for_transaction(
+    pub async fn get_live_position_data_for_transaction(
         &self,
         tx_repo: TransactionRepo,
         pool_address: &str,
         latest_tx: TransactionModelFromDB,
-    ) -> Result<(Vec<PositionModel>, TransactionModelFromDB)> {
+    ) -> Result<(Vec<LivePositionModel>, TransactionModelFromDB)> {
         let mut current_version = self
             .positions_repo
-            .get_latest_version_for_pool(pool_address)
+            .get_latest_version_for_live_pool(pool_address)
             .await
             .context("Failed to get latest version")?;
 
@@ -73,7 +73,7 @@ impl PositionsService {
         while current_version >= 1 {
             let positions = self
                 .positions_repo
-                .get_positions_by_pool_address_and_version(pool_address, current_version)
+                .get_live_positions_by_pool_address_and_version(pool_address, current_version)
                 .await
                 .context("Failed to get positions for version")?;
 

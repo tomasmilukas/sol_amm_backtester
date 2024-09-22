@@ -44,7 +44,7 @@ pub async fn initialize_sol_amm_backtester_database(pool: &PgPool) -> Result<()>
 
 
         r#"
-        CREATE TABLE IF NOT EXISTS positions (
+        CREATE TABLE IF NOT EXISTS live_positions (
             id SERIAL PRIMARY KEY,
             address TEXT NOT NULL,
             pool_address TEXT NOT NULL REFERENCES pools(address),
