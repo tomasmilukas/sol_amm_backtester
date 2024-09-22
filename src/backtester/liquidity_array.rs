@@ -353,8 +353,6 @@ impl LiquidityArray {
             let step_fee = (remaining_fee * step_amount) / remaining_amount;
             let fee_growth = (step_fee * Q128) / liquidity;
 
-            println!("PRE DECISION IF/ELSE: {} {}", remaining_amount, max_in);
-
             // Stay within the initialized range.
             if remaining_amount <= max_in {
                 let old_sqrt_price = current_sqrt_price;

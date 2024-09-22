@@ -22,7 +22,7 @@ impl TransactionsService {
         // any version works, so we pick the first one, since we just need the tick data.
         let position_data = self
             .positions_repo
-            .get_positions_by_pool_address_and_version(pool_address, 0)
+            .get_positions_by_pool_address_and_version(pool_address, 1)
             .await
             .context("Failed to get positions by pool address")?;
 
@@ -40,7 +40,7 @@ impl TransactionsService {
                 .fetch_liquidity_txs_to_update(last_tx_id, batch_size)
                 .await
                 .map_err(|e| {
-                    eprintln!("{}", e); 
+                    eprintln!("{}", e);
                     anyhow::anyhow!("Failed to fetch transactions to update: {}", e)
                 })?;
 
@@ -54,19 +54,19 @@ impl TransactionsService {
                     let liquidity_data = match tx.data.to_liquidity_data() {
                         Ok(data) => data,
                         Err(e) => {
-                            // Handle the error case. You might want to log it, skip this transaction,
-                            // or handle it in some other way depending on your requirements.
                             eprintln!("Error processing transaction: {}", e);
-                            return tx; // Skip this transaction if it's not a liquidity transaction
+                            return tx; // Skip this transaction since it's not a liquidity transaction
                         }
                     };
+                    println!("FULL TX INFO: {:?}", tx);
 
                     tx.data = self.update_transaction_data(
                         liquidity_data,
                         &position_map,
                         &tx.transaction_type,
                     );
-                    tx.ready_for_backtesting = true;
+
+                    tx.ready_for_backtesting = false;
                     tx
                 })
                 .collect();
@@ -76,6 +76,8 @@ impl TransactionsService {
                 .upsert_liquidity_transactions(&updated_transactions)
                 .await
                 .context("Failed to upsert updated transactions")?;
+
+            println!("Updated {} transactions", upserted_count);
 
             // Update last_tx_id for the next iteration
             if let Some(last_tx) = updated_transactions.last() {

@@ -100,7 +100,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
 
     let positions_repo = PositionsRepo::new(pool.clone());
     let positions_api = PositionsApi::new()?;
-    let positions_service = PositionsService::new(positions_repo.clone(), pool_repo, positions_api);
+    let positions_service = PositionsService::new(positions_repo.clone(), positions_api);
 
     match positions_service
         .fetch_and_store_positions_data(&config.pool_address)
@@ -145,8 +145,6 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
         Err(e) => eprintln!("Error syncing transactions: {}", e),
     }
 
-    println!("Transactions synced, time to fill in missing data!");
-
     // Update transactions since not all data can be retrieved during sync. Updates will happen using position_data, to fill in liquidity info.
     let transactions_service = TransactionsService::new(tx_repo, positions_repo);
 
@@ -154,7 +152,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
         .update_and_fill_transactions(&config.pool_address)
         .await
     {
-        Ok(_f) => println!("Updated txs successfully"),
+        Ok(_) => println!("Updated txs successfully"),
         Err(e) => eprintln!("Error updating txs: {}", e),
     }
 
@@ -179,7 +177,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
 
     let positions_repo = PositionsRepo::new(pool.clone());
     let positions_api = PositionsApi::new()?;
-    let positions_service = PositionsService::new(positions_repo, pool_repo, positions_api);
+    let positions_service = PositionsService::new(positions_repo, positions_api);
 
     let tx_repo = TransactionRepo::new(pool);
 

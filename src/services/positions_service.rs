@@ -1,22 +1,18 @@
 use crate::models::positions_model::PositionModel;
 use crate::models::transactions_model::TransactionModelFromDB;
-use crate::repositories::pool_repo::PoolRepo;
 use crate::repositories::positions_repo::PositionsRepo;
 use crate::{api::positions_api::PositionsApi, repositories::transactions_repo::TransactionRepo};
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
 
 pub struct PositionsService {
     positions_repo: PositionsRepo,
-    pool_repo: PoolRepo,
     api: PositionsApi,
 }
 
 impl PositionsService {
-    pub fn new(positions_repo: PositionsRepo, pool_repo: PoolRepo, api: PositionsApi) -> Self {
+    pub fn new(positions_repo: PositionsRepo, api: PositionsApi) -> Self {
         Self {
             positions_repo,
-            pool_repo,
             api,
         }
     }
