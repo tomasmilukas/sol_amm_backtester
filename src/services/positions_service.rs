@@ -42,7 +42,7 @@ impl PositionsService {
         // Upsert positions within the transaction
         for position in positions {
             self.positions_repo
-                .upsert_in_transaction(&mut transaction, pool_address, &position, new_version)
+                .upsert_live_positions_in_transaction(&mut transaction, pool_address, &position, new_version)
                 .await
                 .with_context(|| format!("Failed to upsert position: {}", position.address))?;
         }

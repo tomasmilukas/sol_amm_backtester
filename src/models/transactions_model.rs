@@ -126,6 +126,13 @@ impl TransactionData {
             _ => Err(anyhow::anyhow!("Transaction is not a swap transaction")),
         }
     }
+
+    pub fn to_close_position_data(&self) -> Result<&ClosePositionData> {
+        match self {
+            TransactionData::ClosePosition(data) => Ok(data),
+            _ => Err(anyhow::anyhow!("Transaction is not a swap transaction")),
+        }
+    }
 }
 
 impl LiquidityData {

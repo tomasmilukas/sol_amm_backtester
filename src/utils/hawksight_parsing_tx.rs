@@ -1,7 +1,5 @@
 use crate::{
-    models::transactions_model::{
-        ClosePositionData, LiquidityData, SwapData, TransactionData, TransactionModel,
-    },
+    models::transactions_model::{LiquidityData, SwapData, TransactionData, TransactionModel},
     services::orca_amm_standard::CommonTransactionData,
 };
 use anyhow::{anyhow, Result};
