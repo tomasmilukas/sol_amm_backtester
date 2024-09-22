@@ -1,24 +1,216 @@
 use std::collections::HashMap;
 
-use crate::models::positions_model::LivePositionModel;
-use crate::models::transactions_model::{LiquidityData, TransactionData, TransactionModelFromDB};
+use crate::api::transactions_api::{SignatureInfo, TransactionApi};
+use crate::models::positions_model::{ClosedPositionModel, LivePositionModel};
+use crate::models::transactions_model::TransactionModelFromDB;
 use crate::repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
-use anyhow::{Context, Result};
+use crate::utils::decode::{
+    decode_open_position_data, find_encoded_inner_instruction, OPEN_POSITION_DISCRIMINANT,
+};
+use crate::utils::transaction_utils::{extract_common_data, retry_with_backoff};
+use anyhow::{anyhow, Context, Result};
+use futures::stream::{self, StreamExt};
+use serde_json::Value;
+
+use super::transactions_sync_amm_service::constants;
 
 pub struct TransactionsService {
     tx_repo: TransactionRepo,
+    tx_api: TransactionApi,
     positions_repo: PositionsRepo,
 }
 
 impl TransactionsService {
-    pub fn new(tx_repo: TransactionRepo, positions_repo: PositionsRepo) -> Self {
+    pub fn new(
+        tx_repo: TransactionRepo,
+        tx_api: TransactionApi,
+        positions_repo: PositionsRepo,
+    ) -> Self {
         Self {
             tx_repo,
+            tx_api,
             positions_repo,
         }
     }
 
-    pub async fn update_and_fill_transactions(&self, pool_address: &str) -> Result<()> {
+    // Since liquidity transactions dont have the ticks that they provide liquidity at, we need to fetch the openPosition transactions.
+    // We fetch the openPosition transactions from the synced closedPositions transactions. After fetching those, we save new openPosition transactions which can be used to fill in that info in update_and_fill_liquidity_transactions.
+    // The following below is ONLY FOR ORCA. IF you expand this backtester for raydium and others, it needs to be adjusted.
+    pub async fn create_closed_positions_from_txs(&self, pool_address: &str) -> Result<()> {
+        let mut last_tx_id = 0;
+
+        loop {
+            let closed_position_transactions = self
+                .tx_repo
+                .get_closed_position_transactions_to_update(pool_address, last_tx_id, 50)
+                .await
+                .map_err(|e| {
+                    eprintln!("{}", e);
+                    anyhow::anyhow!("Failed to fetch close positions transactions: {}", e)
+                })?;
+
+            if closed_position_transactions.is_empty() {
+                break; // No more transactions to process
+            }
+
+            let mut open_position_signatures: Vec<SignatureInfo> = Vec::new();
+            let mut closed_position_ids: Vec<i64> = Vec::new();
+
+            for closed_position_tx in &closed_position_transactions {
+                let key_position_address = closed_position_tx
+                    .data
+                    .to_close_position_data()?
+                    .position_address
+                    .clone();
+
+                println!("ENTER");
+
+                if let Some(first_signature) = self
+                    .fetch_first_signature_for_position(&key_position_address)
+                    .await?
+                {
+                    println!("A FIRST SIGNATURE??? {:?}", first_signature);
+                    open_position_signatures.push(first_signature);
+                    closed_position_ids.push(closed_position_tx.tx_id);
+                }
+            }
+
+            println!("OPEN POSITION SIGS: {:?}", open_position_signatures);
+
+            let signature_chunks: Vec<Vec<String>> = open_position_signatures
+                .chunks(constants::TX_BATCH_SIZE)
+                .map(|chunk| chunk.iter().map(|sig| sig.signature.clone()).collect())
+                .collect();
+
+            let fetch_futures = signature_chunks.into_iter().map(|chunk| {
+                let chunk_clone = chunk.clone();
+                async move {
+                    retry_with_backoff(
+                        || self.tx_api.fetch_transaction_data(&chunk_clone),
+                        constants::MAX_RETRIES,
+                        constants::BASE_DELAY,
+                        constants::MAX_DELAY,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("Failed to fetch transaction data: {:?}", e))
+                }
+            });
+
+            let all_tx_data: Vec<Value> = stream::iter(fetch_futures)
+                .buffer_unordered(3)
+                .flat_map(|result| stream::iter(result.unwrap_or_default()))
+                .collect()
+                .await;
+
+            // Decode and insert the data into the db.
+            let _ = self
+                .decode_and_insert_closed_position_data(pool_address, all_tx_data)
+                .await;
+
+            // Update ready_for_backtesting flag
+            self.tx_repo
+                .update_ready_for_backtesting(&closed_position_ids)
+                .await
+                .context("Failed to update ready_for_backtesting flag")?;
+
+            // Update last_tx_id for the next iteration
+            if let Some(last_tx) = closed_position_transactions.last() {
+                last_tx_id = last_tx.tx_id;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn decode_and_insert_closed_position_data(
+        &self,
+        pool_address: &str,
+        json_arr: Vec<Value>,
+    ) -> Result<()> {
+        let mut closed_position_to_insert: Vec<ClosedPositionModel> = Vec::new();
+
+        for tx_data in json_arr {
+            let common_data = extract_common_data(&tx_data)?;
+
+            let encoded_data =
+                find_encoded_inner_instruction(&tx_data, OPEN_POSITION_DISCRIMINANT)?;
+
+            let (tick_lower, tick_upper) = decode_open_position_data(&encoded_data)?;
+
+            closed_position_to_insert.push(ClosedPositionModel {
+                tick_lower,
+                tick_upper,
+                position_created_at: common_data.block_time_utc,
+                // in open position transactions in ORCA, the address is always in 4th position
+                address: common_data.account_keys[3].clone(),
+            })
+        }
+
+        // Start a transaction
+        let mut transaction = self
+            .positions_repo
+            .begin_transaction()
+            .await
+            .context("Failed to start transaction")?;
+
+        // Upsert positions within the transaction
+        for position in closed_position_to_insert {
+            self.positions_repo
+                .upsert_closed_positions_in_transaction(&mut transaction, pool_address, &position)
+                .await
+                .with_context(|| format!("Failed to upsert position: {}", position.address))?;
+        }
+
+        // Commit the transaction
+        transaction
+            .commit()
+            .await
+            .context("Failed to commit transaction")?;
+
+        Ok(())
+    }
+
+    async fn fetch_first_signature_for_position(
+        &self,
+        key_position_address: &str,
+    ) -> Result<Option<SignatureInfo>> {
+        let mut before: Option<String> = None;
+        let limit = 1000;
+
+        loop {
+            println!("ENTER 2: {}", key_position_address);
+
+            let signatures = retry_with_backoff(
+                || {
+                    self.tx_api.fetch_transaction_signatures(
+                        key_position_address.trim_matches('"'), // JSON string needs to be trimmed before passing into the API
+                        limit,
+                        before.as_deref(),
+                    )
+                },
+                constants::MAX_RETRIES,
+                constants::BASE_DELAY,
+                constants::MAX_DELAY,
+            )
+            .await
+            .context("Failed to fetch signatures")?;
+
+            println!("SIGS FETCHED: {:?}", signatures);
+
+            if signatures.is_empty() {
+                return Ok(None); // No more signatures found
+            }
+
+            // Check if we've reached the oldest signature
+            if signatures.len() < limit as usize {
+                return Ok(signatures.last().cloned());
+            }
+
+            before = signatures.last().map(|sig| sig.signature.clone());
+        }
+    }
+
+    pub async fn update_and_fill_liquidity_transactions(&self, pool_address: &str) -> Result<()> {
         // any version works, so we pick the first one, since we just need the tick data.
         let position_data = self
             .positions_repo
@@ -89,23 +281,5 @@ impl TransactionsService {
         }
 
         Ok(())
-    }
-
-    pub fn update_transaction_data(
-        &self,
-        data: &LiquidityData,
-        position_map: &HashMap<String, LivePositionModel>,
-        transaction_type: &String,
-    ) -> TransactionData {
-        let mut updated_data = data.clone();
-
-        if let Some(position) = position_map.get(&data.position_address) {
-            // Update tick_lower and tick_upper if the position is found
-            updated_data.tick_lower = Some(position.tick_lower);
-            updated_data.tick_upper = Some(position.tick_upper);
-        }
-
-        // Convert the updated data into TransactionData
-        updated_data.into_transaction_data(transaction_type)
     }
 }

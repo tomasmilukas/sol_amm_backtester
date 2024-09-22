@@ -5,13 +5,20 @@ use sqlx::FromRow;
 use crate::utils::decode::Pubkey;
 
 #[derive(Debug, FromRow, Serialize, Deserialize, Clone)]
-
 pub struct LivePositionModel {
     pub address: String,
     pub liquidity: u128,
     pub tick_lower: i32,
     pub tick_upper: i32,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow, Serialize, Deserialize, Clone)]
+pub struct ClosedPositionModel {
+    pub address: String,
+    pub tick_lower: i32,
+    pub tick_upper: i32,
+    pub position_created_at: DateTime<Utc>,
 }
 
 // Below is for decoding.

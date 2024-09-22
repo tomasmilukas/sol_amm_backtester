@@ -124,6 +124,7 @@ impl OrcaOptimizedAMM {
                         | "twoHopSwap"
                         | "increaseLiquidityV2"
                         | "decreaseLiquidityV2"
+                        | "closePosition"
                 ) && (payload.get("keyWhirlpool") == Some(&Value::String(pool_address.to_string()))
                     || payload.get("keyWhirlpoolOne")
                         == Some(&Value::String(pool_address.to_string()))
@@ -171,10 +172,10 @@ impl OrcaOptimizedAMM {
                         pool_address: pool_address.to_string(),
                         block_time,
                         block_time_utc: Utc.timestamp_opt(block_time, 0).unwrap(),
-                        transaction_type: "Swap".to_string(),
-                        ready_for_backtesting: true,
+                        transaction_type: "ClosePosition".to_string(),
+                        ready_for_backtesting: false, // used for fetching openPositions
                         data: TransactionData::ClosePosition(ClosePositionData {
-                            position_address: instruction["keyPosition"].to_string(),
+                            position_address: instruction["payload"].as_object().unwrap()["keyPosition"].to_string(),
                         }),
                     }),
                     _ => None,

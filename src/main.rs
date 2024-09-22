@@ -102,13 +102,13 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     let positions_api = PositionsApi::new()?;
     let positions_service = PositionsService::new(positions_repo.clone(), positions_api);
 
-    match positions_service
-        .fetch_and_store_positions_data(&config.pool_address)
-        .await
-    {
-        Ok(()) => println!("Positions data fetched and stored successfully"),
-        Err(e) => eprintln!("Positions fetching related error: {}", e),
-    }
+    // match positions_service
+    //     .fetch_and_store_positions_data(&config.pool_address)
+    //     .await
+    // {
+    //     Ok(()) => println!("Positions data fetched and stored successfully"),
+    //     Err(e) => eprintln!("Positions fetching related error: {}", e),
+    // }
 
     let tx_repo = TransactionRepo::new(pool);
     let tx_api = TransactionApi::new()?;
@@ -116,7 +116,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     let amm_service: Arc<dyn AMMService> = match create_amm_service(
         platform,
         tx_repo.clone(),
-        tx_api,
+        tx_api.clone(),
         &pool_data.token_a_address,
         &pool_data.token_b_address,
         &pool_data.token_a_vault,
@@ -137,22 +137,30 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     // Sync transactions
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
-    match amm_service
-        .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
-        .await
-    {
-        Ok(_f) => println!("Synced transactions successfully"),
-        Err(e) => eprintln!("Error syncing transactions: {}", e),
-    }
+    // match amm_service
+    //     .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
+    //     .await
+    // {
+    //     Ok(_f) => println!("Synced transactions successfully"),
+    //     Err(e) => eprintln!("Error syncing transactions: {}", e),
+    // }
 
     // Update transactions since not all data can be retrieved during sync. Updates will happen using position_data, to fill in liquidity info.
-    let transactions_service = TransactionsService::new(tx_repo, positions_repo);
+    let transactions_service = TransactionsService::new(tx_repo, tx_api, positions_repo);
 
     match transactions_service
-        .update_and_fill_transactions(&config.pool_address)
+        .create_closed_positions_from_txs(&config.pool_address)
         .await
     {
-        Ok(_) => println!("Updated txs successfully"),
+        Ok(_) => println!("Created all the closed positions for liquidity info"),
+        Err(e) => eprintln!("Error updating txs: {}", e),
+    }
+
+    match transactions_service
+        .update_and_fill_liquidity_transactions(&config.pool_address)
+        .await
+    {
+        Ok(_) => println!("Updated liquidity transactions successfully"),
         Err(e) => eprintln!("Error updating txs: {}", e),
     }
 

@@ -1,4 +1,4 @@
-use crate::models::positions_model::LivePositionModel;
+use crate::models::positions_model::{ClosedPositionModel, LivePositionModel};
 use chrono::{DateTime, Utc};
 use sqlx::{prelude::FromRow, query_as, Pool, Postgres, Transaction};
 use std::str::FromStr;
@@ -29,7 +29,7 @@ impl PositionsRepo {
         self.db.begin().await
     }
 
-    pub async fn upsert_in_transaction<'a>(
+    pub async fn upsert_live_positions_in_transaction<'a>(
         &self,
         transaction: &mut Transaction<'a, Postgres>,
         pool_address: &str,
@@ -65,6 +65,43 @@ impl PositionsRepo {
                 eprintln!("Position: {:?}", position);
                 eprintln!("Pool address: {}", pool_address);
                 eprintln!("Version: {}", version);
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn upsert_closed_positions_in_transaction<'a>(
+        &self,
+        transaction: &mut Transaction<'a, Postgres>,
+        pool_address: &str,
+        position: &ClosedPositionModel,
+    ) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+                INSERT INTO closed_positions (
+                    address, pool_address, tick_lower, tick_upper, version
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (address, pool_address, version) DO UPDATE SET
+                    liquidity = EXCLUDED.liquidity,
+                    tick_lower = EXCLUDED.tick_lower,
+                    tick_upper = EXCLUDED.tick_upper
+            "#,
+        )
+        .bind(&position.address)
+        .bind(pool_address)
+        .bind(position.tick_lower)
+        .bind(position.tick_upper)
+        .execute(transaction)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("SQL Error: {:?}", e);
+                eprintln!("Error details: {}", e);
+                eprintln!("Position: {:?}", position);
+                eprintln!("Pool address: {}", pool_address);
                 Err(e)
             }
         }

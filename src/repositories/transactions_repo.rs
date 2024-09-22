@@ -290,6 +290,58 @@ impl TransactionRepo {
         self.row_to_transaction_model(&row)
     }
 
+    pub async fn get_closed_position_transactions_to_update(
+        &self,
+        pool_address: &str,
+        last_tx_id: i64,
+        limit: i64,
+    ) -> Result<Vec<TransactionModelFromDB>> {
+        let rows = sqlx::query(
+            r#"
+                SELECT
+                    tx_id, signature, pool_address, block_time, block_time_utc,
+                    transaction_type, ready_for_backtesting, data
+                FROM transactions
+                WHERE 
+                    tx_id > $1 
+                    AND pool_address = $2
+                    AND ready_for_backtesting = FALSE
+                    AND transaction_type = 'ClosePosition'
+                ORDER BY tx_id
+                LIMIT $3
+            "#,
+        )
+        .bind(last_tx_id)
+        .bind(pool_address)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            eprintln!("SQL Error: {:?}", e);
+            e
+        })?;
+
+        rows.into_iter()
+            .map(|row| self.row_to_transaction_model(&row))
+            .collect()
+    }
+
+    pub async fn update_ready_for_backtesting(&self, tx_ids: &[i64]) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE transactions
+            SET ready_for_backtesting = TRUE
+            WHERE tx_id = ANY($1)
+            "#,
+        )
+        .bind(tx_ids)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update ready_for_backtesting flag")?;
+
+        Ok(())
+    }
+
     fn row_to_transaction_model(
         &self,
         row: &sqlx::postgres::PgRow,
