@@ -116,7 +116,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     let amm_service: Arc<dyn AMMService> = match create_amm_service(
         platform,
         tx_repo.clone(),
-        tx_api,
+        tx_api.clone(),
         &pool_data.token_a_address,
         &pool_data.token_b_address,
         &pool_data.token_a_vault,
@@ -146,13 +146,21 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     }
 
     // Update transactions since not all data can be retrieved during sync. Updates will happen using position_data, to fill in liquidity info.
-    let transactions_service = TransactionsService::new(tx_repo, positions_repo);
+    let transactions_service = TransactionsService::new(tx_repo, tx_api, positions_repo);
 
     match transactions_service
-        .update_and_fill_transactions(&config.pool_address)
+        .create_closed_positions_from_txs(&config.pool_address)
         .await
     {
-        Ok(_) => println!("Updated txs successfully"),
+        Ok(_) => println!("Created all the closed positions for liquidity info"),
+        Err(e) => eprintln!("Error updating txs: {}", e),
+    }
+
+    match transactions_service
+        .update_and_fill_liquidity_transactions(&config.pool_address)
+        .await
+    {
+        Ok(_) => println!("Updated liquidity transactions successfully"),
         Err(e) => eprintln!("Error updating txs: {}", e),
     }
 
@@ -187,7 +195,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
     let (positions_data, tx_to_sync_from) = positions_service
-        .get_position_data_for_transaction(
+        .get_live_position_data_for_transaction(
             tx_repo.clone(),
             &config.pool_address,
             latest_transaction.clone().unwrap(),

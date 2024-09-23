@@ -3,7 +3,7 @@ use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::{models::positions_model::PositionModel, utils::decode::decode_position};
+use crate::{models::positions_model::LivePositionModel, utils::decode::decode_position};
 
 const ORCA_RPC_URL: &str = "https://rpc-proxy-account-microscope-240617.yugure.dev/";
 
@@ -18,7 +18,7 @@ impl PositionsApi {
         })
     }
 
-    pub async fn get_positions(&self, pool_address: &str) -> Result<Vec<PositionModel>> {
+    pub async fn get_positions(&self, pool_address: &str) -> Result<Vec<LivePositionModel>> {
         let payload = serde_json::json!({
             "jsonrpc": "2.0",
             "id": "1",
@@ -47,7 +47,7 @@ impl PositionsApi {
         self.parse_positions(response)
     }
 
-    fn parse_positions(&self, response: Value) -> Result<Vec<PositionModel>> {
+    fn parse_positions(&self, response: Value) -> Result<Vec<LivePositionModel>> {
         let accounts = response["result"]
             .as_array()
             .ok_or_else(|| anyhow!("Invalid JSON structure"))?;
@@ -68,7 +68,7 @@ impl PositionsApi {
                             .ok_or_else(|| anyhow!("Invalid pubkey"))?,
                     );
 
-                    let position_model = PositionModel::new(
+                    let position_model = LivePositionModel::new(
                         address,
                         position.liquidity,
                         position.tick_lower_index,

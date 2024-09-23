@@ -34,6 +34,7 @@ pub enum TransactionData {
     Swap(SwapData),
     IncreaseLiquidity(LiquidityData),
     DecreaseLiquidity(LiquidityData),
+    ClosePosition(ClosePositionData),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -55,7 +56,12 @@ pub struct LiquidityData {
     pub liquidity_amount: String,
     pub tick_lower: Option<i32>,
     pub tick_upper: Option<i32>,
-    pub possible_positions: Vec<String>,
+    pub position_address: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClosePositionData {
+    pub position_address: String,
 }
 
 impl TransactionModel {
@@ -108,15 +114,42 @@ impl TransactionData {
 
     pub fn from_liquidity_data(data: LiquidityData, is_increase: bool) -> Self {
         if is_increase {
-            TransactionData::IncreaseLiquidity(data)
+            TransactionData::IncreaseLiquidity(LiquidityData {
+                token_a: data.token_a,
+                token_b: data.token_b,
+                amount_a: data.amount_a,
+                amount_b: data.amount_b,
+                liquidity_amount: data.liquidity_amount,
+                tick_lower: data.tick_lower,
+                tick_upper: data.tick_upper,
+                position_address: data.position_address.trim_matches('"').to_string(), // JSON string needs to be trimmed
+            })
         } else {
-            TransactionData::DecreaseLiquidity(data)
+            TransactionData::DecreaseLiquidity(LiquidityData {
+                token_a: data.token_a,
+                token_b: data.token_b,
+                amount_a: data.amount_a,
+                amount_b: data.amount_b,
+                liquidity_amount: data.liquidity_amount,
+                tick_lower: data.tick_lower,
+                tick_upper: data.tick_upper,
+                position_address: data.position_address.trim_matches('"').to_string(), // JSON string needs to be trimmed
+            })
         }
     }
 
     pub fn to_swap_data(&self) -> Result<&SwapData> {
         match self {
             TransactionData::Swap(data) => Ok(data),
+            _ => Err(anyhow::anyhow!("Transaction is not a swap transaction")),
+        }
+    }
+
+    pub fn to_close_position_data(&self) -> Result<ClosePositionData> {
+        match self {
+            TransactionData::ClosePosition(data) => Ok(ClosePositionData {
+                position_address: data.position_address.trim_matches('"').to_string(), // JSON string needs to be trimmed
+            }),
             _ => Err(anyhow::anyhow!("Transaction is not a swap transaction")),
         }
     }
