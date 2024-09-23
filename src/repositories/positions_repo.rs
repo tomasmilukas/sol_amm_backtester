@@ -1,6 +1,6 @@
 use crate::models::positions_model::{ClosedPositionModel, LivePositionModel};
 use chrono::{DateTime, Utc};
-use sqlx::{prelude::FromRow, query_as, Pool, Postgres, Transaction};
+use sqlx::{prelude::FromRow, Pool, Postgres, Transaction};
 use std::str::FromStr;
 
 #[derive(Clone)]
@@ -120,7 +120,24 @@ impl PositionsRepo {
                 .fetch_all(&self.db)
                 .await?;
 
-        rows.into_iter().map(|r| self.row_to_model(r)).collect()
+        rows.into_iter()
+            .map(|r| self.live_position_row_to_model(r))
+            .collect()
+    }
+
+    pub async fn get_closed_positions_by_pool_address(
+        &self,
+        pool_address: &str,
+    ) -> Result<Vec<ClosedPositionModel>, sqlx::Error> {
+        let rows: Vec<ClosedPositionModel> =
+            sqlx::query_as("SELECT * FROM closed_positions WHERE pool_address = $1")
+                .bind(pool_address)
+                .fetch_all(&self.db)
+                .await?;
+
+        rows.into_iter()
+            .map(|r| self.closed_position_row_to_model(r))
+            .collect()
     }
 
     pub async fn get_latest_version_for_live_pool(
@@ -138,7 +155,10 @@ impl PositionsRepo {
         result.ok_or(sqlx::Error::RowNotFound)
     }
 
-    fn row_to_model(&self, row: LivePositionRow) -> Result<LivePositionModel, sqlx::Error> {
+    fn live_position_row_to_model(
+        &self,
+        row: LivePositionRow,
+    ) -> Result<LivePositionModel, sqlx::Error> {
         let liquidity =
             u128::from_str(&row.liquidity).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
 
@@ -148,6 +168,18 @@ impl PositionsRepo {
             tick_lower: row.tick_lower,
             tick_upper: row.tick_upper,
             created_at: row.created_at,
+        })
+    }
+
+    fn closed_position_row_to_model(
+        &self,
+        row: ClosedPositionModel,
+    ) -> Result<ClosedPositionModel, sqlx::Error> {
+        Ok(ClosedPositionModel {
+            address: row.address,
+            tick_lower: row.tick_lower,
+            tick_upper: row.tick_upper,
+            position_created_at: row.position_created_at,
         })
     }
 }

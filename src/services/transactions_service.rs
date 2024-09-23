@@ -22,6 +22,11 @@ pub struct TransactionsService {
     positions_repo: PositionsRepo,
 }
 
+struct PositionData {
+    tick_lower: i32,
+    tick_upper: i32,
+}
+
 impl TransactionsService {
     pub fn new(
         tx_repo: TransactionRepo,
@@ -228,19 +233,44 @@ impl TransactionsService {
 
     pub async fn update_and_fill_liquidity_transactions(&self, pool_address: &str) -> Result<()> {
         // any version works, so we pick the first one, since we just need the tick data.
-        let position_data = self
+        let live_position_data = self
             .positions_repo
             .get_live_positions_by_pool_address_and_version(pool_address, 1)
             .await
-            .context("Failed to get positions by pool address")?;
+            .context("Failed to get live positions by pool address")?;
+
+        let closed_position_data = self
+            .positions_repo
+            .get_closed_positions_by_pool_address(pool_address)
+            .await
+            .context("Failed to get closed positions by pool address")?;
 
         let mut last_tx_id = 0;
         let batch_size = 5000;
 
-        let position_map: HashMap<String, LivePositionModel> = position_data
-            .iter()
-            .map(|p| (p.address.clone(), p.clone()))
-            .collect();
+        let mut position_map: HashMap<String, PositionData> = HashMap::new();
+
+        // Add live positions
+        for p in live_position_data {
+            position_map.insert(
+                p.address.clone(),
+                PositionData {
+                    tick_lower: p.tick_lower,
+                    tick_upper: p.tick_upper,
+                },
+            );
+        }
+
+        // Add closed positions (overwriting live positions if they exist)
+        for p in closed_position_data {
+            position_map.insert(
+                p.address.clone(),
+                PositionData {
+                    tick_lower: p.tick_lower,
+                    tick_upper: p.tick_upper,
+                },
+            );
+        }
 
         loop {
             let transactions = self
