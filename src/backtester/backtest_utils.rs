@@ -17,6 +17,8 @@ use super::liquidity_array::LiquidityArray;
 pub fn create_full_liquidity_range(
     tick_spacing: i16,
     positions: Vec<LivePositionModel>,
+    pool_model: PoolModel,
+    latest_transaction: TransactionModelFromDB,
     fee_rate: i16,
 ) -> Result<LiquidityArray> {
     let min_tick = -500_000;
@@ -24,6 +26,27 @@ pub fn create_full_liquidity_range(
 
     let mut liquidity_array =
         LiquidityArray::new(min_tick, max_tick, tick_spacing as i32, fee_rate);
+
+    // set price to correctly calculate active liquidity inside update_liquidity
+    let swap_data = latest_transaction
+        .data
+        .to_swap_data()
+        .map_err(|e| SyncError::DatabaseError(e.to_string()))?
+        .clone();
+
+    let is_sell = swap_data.token_in == pool_model.token_a_address;
+
+    if is_sell {
+        let tick = price_to_tick(swap_data.amount_out as f64 / swap_data.amount_in as f64);
+
+        liquidity_array.current_tick = tick;
+        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
+    } else {
+        let tick = price_to_tick(swap_data.amount_in as f64 / swap_data.amount_out as f64);
+
+        liquidity_array.current_tick = tick;
+        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
+    };
 
     for position in positions {
         // default true since we are adding all positions.
@@ -50,26 +73,6 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
 
     // Initialize lowest_tx_id with the maximum possible i64 value
     let mut lowest_tx_id = i64::MAX;
-
-    let swap_data = latest_transaction
-        .data
-        .to_swap_data()
-        .map_err(|e| SyncError::DatabaseError(e.to_string()))?
-        .clone();
-
-    let is_sell = swap_data.token_in == pool_model.token_a_address;
-
-    if is_sell {
-        let tick = price_to_tick(swap_data.amount_out as f64 / swap_data.amount_in as f64);
-
-        liquidity_array.current_tick = tick;
-        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
-    } else {
-        let tick = price_to_tick(swap_data.amount_in as f64 / swap_data.amount_out as f64);
-
-        liquidity_array.current_tick = tick;
-        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
-    };
 
     loop {
         let transactions = transaction_repo
@@ -98,6 +101,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                     // reverse
                     let is_increase = transaction.transaction_type.as_str() != "IncreaseLiquidity";
 
+                    println!("UPDATING LIQ: {}", transaction.signature);
+
                     liquidity_array.update_liquidity(
                         liquidity_data.tick_lower.unwrap(),
                         liquidity_data.tick_upper.unwrap(),
@@ -110,6 +115,10 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .data
                         .to_swap_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+                    println!("SWAPPING: {}", swap_data.amount_in);
+
+                    let is_sell = swap_data.token_in == pool_model.token_a_address;
 
                     // flip the is_sell
                     liquidity_array.simulate_swap(U256::from(swap_data.amount_in), !is_sell)?;

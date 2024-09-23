@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::transactions_api::{SignatureInfo, TransactionApi};
-use crate::models::positions_model::{ClosedPositionModel, LivePositionModel};
-use crate::models::transactions_model::TransactionModelFromDB;
+use crate::models::positions_model::ClosedPositionModel;
+use crate::models::transactions_model::{TransactionData, TransactionModelFromDB};
 use crate::repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use crate::utils::decode::{
-    decode_hawksight_open_position_data, decode_open_position_data, find_encoded_inner_instruction,
-    OPEN_POSITION_HAWKSIGHT_DISCRIMINANT, OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT,
+    decode_open_position_data, decode_open_position_with_metadata_data,
+    find_encoded_transaction_instruction, OPEN_POSITION_HAWKSIGHT_DISCRIMINANT,
+    OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT,
+    OPEN_POSITION_WITH_METADATA_ORCA_STANDARD_DISCRIMINANT,
 };
 use crate::utils::hawksight_parsing_tx::HawksightParser;
 use crate::utils::transaction_utils::{extract_common_data, retry_with_backoff};
@@ -22,6 +24,7 @@ pub struct TransactionsService {
     positions_repo: PositionsRepo,
 }
 
+#[derive(Debug)]
 struct PositionData {
     tick_lower: i32,
     tick_upper: i32,
@@ -41,7 +44,7 @@ impl TransactionsService {
     }
 
     // Since liquidity transactions dont have the ticks that they provide liquidity at, we need to fetch the openPosition transactions.
-    // We fetch the openPosition transactions from the synced closedPositions transactions. After fetching those, we save new openPosition transactions which can be used to fill in that info in update_and_fill_liquidity_transactions.
+    // We fetch the openPosition transactions from the synced closedPositions/liquidity transactions. After fetching those, we save new openPosition transactions which can be used to fill in that info in update_and_fill_liquidity_transactions.
     // The following below is ONLY FOR ORCA. IF you expand this backtester for raydium and others, it needs to be adjusted.
     pub async fn create_closed_positions_from_txs(&self, pool_address: &str) -> Result<()> {
         let mut last_tx_id = 0;
@@ -49,7 +52,7 @@ impl TransactionsService {
         loop {
             let closed_position_transactions = self
                 .tx_repo
-                .get_closed_position_transactions_to_update(pool_address, last_tx_id, 50)
+                .get_transactions_to_create_closed_positions(pool_address, last_tx_id, 100)
                 .await
                 .map_err(|e| {
                     eprintln!("{}", e);
@@ -62,13 +65,39 @@ impl TransactionsService {
 
             let mut open_position_signatures: Vec<SignatureInfo> = Vec::new();
             let mut closed_position_ids: Vec<i64> = Vec::new();
+            let mut processed_positions: HashSet<String> = HashSet::new();
 
             for closed_position_tx in &closed_position_transactions {
-                let key_position_address = closed_position_tx
-                    .data
-                    .to_close_position_data()?
-                    .position_address
-                    .clone();
+                let key_position_address = match &closed_position_tx.data {
+                    TransactionData::ClosePosition(data) => {
+                        // Use the to_close_position_data method
+                        match TransactionData::ClosePosition(data.clone()).to_close_position_data()
+                        {
+                            Ok(close_data) => close_data.position_address,
+                            Err(e) => {
+                                eprintln!("Error processing ClosePosition data: {}", e);
+                                continue;
+                            }
+                        }
+                    }
+                    TransactionData::DecreaseLiquidity(data)
+                    | TransactionData::IncreaseLiquidity(data) => {
+                        // Use the to_liquidity_data method
+                        match closed_position_tx.data.to_liquidity_data() {
+                            Ok(liquidity_data) => liquidity_data.position_address.clone(),
+                            Err(e) => {
+                                eprintln!("Error processing Liquidity data: {}", e);
+                                continue;
+                            }
+                        }
+                    }
+                    _ => continue, // Skip other transaction types
+                };
+
+                // If we've already processed this position, skip it
+                if !processed_positions.insert(key_position_address.clone()) {
+                    continue;
+                }
 
                 if let Some(first_signature) = self
                     .fetch_first_signature_for_position(&key_position_address)
@@ -109,7 +138,7 @@ impl TransactionsService {
                 .decode_and_insert_closed_position_data(pool_address, all_tx_data)
                 .await;
 
-            // Update ready_for_backtesting flag
+            // Update ready_for_backtesting flag only for closed positions
             self.tx_repo
                 .update_ready_for_backtesting(&closed_position_ids)
                 .await
@@ -135,39 +164,69 @@ impl TransactionsService {
             let common_data = extract_common_data(&tx_data)?;
             let is_hawksight_tx = HawksightParser::is_hawksight_transaction(&tx_data);
 
-            let encoded_data = if is_hawksight_tx {
-                find_encoded_inner_instruction(&tx_data, OPEN_POSITION_HAWKSIGHT_DISCRIMINANT)
+            let log_messages = tx_data["meta"]["logMessages"]
+                .as_array()
+                .ok_or_else(|| anyhow!("Instructions not found in transaction data"))?;
+
+            let has_open_position = log_messages.iter().any(|msg| {
+                msg.as_str()
+                    .map_or(false, |s| s == "Program log: Instruction: OpenPosition")
+            });
+
+            let has_open_position_with_metadata = log_messages.iter().any(|msg| {
+                msg.as_str().map_or(false, |s| {
+                    s == "Program log: Instruction: OpenPositionWithMetadata"
+                })
+            });
+
+            let discriminant = if is_hawksight_tx {
+                OPEN_POSITION_HAWKSIGHT_DISCRIMINANT
+            } else if has_open_position_with_metadata {
+                OPEN_POSITION_WITH_METADATA_ORCA_STANDARD_DISCRIMINANT
+            } else if has_open_position {
+                OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT
             } else {
-                find_encoded_inner_instruction(&tx_data, OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT)
+                println!(
+                    "No encoding logic for transaction: {}",
+                    common_data.signature
+                );
+                continue;
             };
 
-            match encoded_data {
-                Ok(data) => {
-                    let (tick_lower, tick_upper) = if is_hawksight_tx {
-                        decode_hawksight_open_position_data(&data)?
-                    } else {
-                        decode_open_position_data(&data)?
-                    };
+            let encoded_data = find_encoded_transaction_instruction(&tx_data, discriminant);
 
-                    closed_position_to_insert.push(ClosedPositionModel {
-                        tick_lower,
-                        tick_upper,
-                        position_created_at: common_data.block_time_utc,
-                        address: if is_hawksight_tx {
-                            // in open position transactions in HAWKSIGHT ORCA, the address is always in 6th position
-                            common_data.account_keys[5].trim_matches('"').to_string()
-                        } else {
-                            // in open position transactions in ORCA, the address is always in 4th position
-                            common_data.account_keys[3].trim_matches('"').to_string()
-                        },
-                    });
-                }
-                Err(_) => {
-                    println!(
-                        "NO ENCODING LOGIC FOR TRANSACTION: {}",
-                        common_data.signature
-                    );
-                }
+            if let Ok(data) = encoded_data {
+                let (tick_lower, tick_upper) = match if has_open_position_with_metadata {
+                    decode_open_position_with_metadata_data(&data)
+                } else {
+                    // works for hawksight too
+                    decode_open_position_data(&data)
+                } {
+                    Ok(ticks) => ticks,
+                    Err(e) => {
+                        println!(
+                            "Error decoding position data: {}. Skipping transaction {}. Encoded data {}",
+                            e, common_data.signature, data
+                        );
+                        continue;
+                    }
+                };
+
+                closed_position_to_insert.push(ClosedPositionModel {
+                    tick_lower,
+                    tick_upper,
+                    position_created_at: common_data.block_time_utc,
+                    address: if is_hawksight_tx {
+                        // in open position transactions in HAWKSIGHT ORCA, the address is always in 6th position
+                        common_data.account_keys[5].trim_matches('"').to_string()
+                    } else if has_open_position_with_metadata {
+                        // in open position with metadata transactions in ORCA, the address is always in 4th position
+                        common_data.account_keys[3].trim_matches('"').to_string()
+                    } else {
+                        // in open position transactions in ORCA, the address is always in 9th position
+                        common_data.account_keys[8].trim_matches('"').to_string()
+                    },
+                });
             }
         }
 
@@ -179,9 +238,9 @@ impl TransactionsService {
             .context("Failed to start transaction")?;
 
         // Upsert positions within the transaction
-        for position in closed_position_to_insert {
+        for position in &closed_position_to_insert {
             self.positions_repo
-                .upsert_closed_positions_in_transaction(&mut transaction, pool_address, &position)
+                .upsert_closed_positions_in_transaction(&mut transaction, pool_address, position)
                 .await
                 .with_context(|| format!("Failed to upsert position: {}", position.address))?;
         }
@@ -191,6 +250,11 @@ impl TransactionsService {
             .commit()
             .await
             .context("Failed to commit transaction")?;
+
+        println!(
+            "Inserted {} closed positions into the database!",
+            closed_position_to_insert.len()
+        );
 
         Ok(())
     }
@@ -261,7 +325,7 @@ impl TransactionsService {
             );
         }
 
-        // Add closed positions (overwriting live positions if they exist)
+        // Add closed positions
         for p in closed_position_data {
             position_map.insert(
                 p.address.clone(),
@@ -305,9 +369,22 @@ impl TransactionsService {
                         updated_data.tick_upper = Some(position.tick_upper);
                     }
 
+                    if liquidity_data.position_address
+                        == "weGhsejfiXm7WsmtPQ4nxfH2geSgBmDmG72fcLxMLUw"
+                    {
+                        println!("UPDATING THIS NASTY TX");
+                        println!("POSITION ADDRESS: {}", &liquidity_data.position_address);
+                        println!("NEW DATA: {:?}", updated_data);
+                        println!(
+                            "IN MAP: {:?}",
+                            position_map.get(&liquidity_data.position_address)
+                        );
+                    }
+
                     // Convert the updated data into TransactionData
                     tx.data = updated_data.into_transaction_data(&tx.transaction_type);
-                    tx.ready_for_backtesting = false;
+                    tx.ready_for_backtesting = true;
+
                     tx
                 })
                 .collect();

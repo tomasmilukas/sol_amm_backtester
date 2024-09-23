@@ -179,7 +179,7 @@ impl LiquidityArray {
             self.data[lower_tick_index].is_initialized =
                 self.data[lower_tick_index].net_liquidity != 0;
             self.data[upper_tick_index].is_initialized =
-                self.data[lower_tick_index].net_liquidity != 0;
+                self.data[upper_tick_index].net_liquidity != 0;
         }
 
         // this range logic comes from here: https://github.com/Uniswap/v3-core/blob/main/contracts/UniswapV3Pool.sol#L328
@@ -189,6 +189,7 @@ impl LiquidityArray {
             // If in range, add it to active liquidity
             self.active_liquidity += U256::from(net_liquidity)
         } else if in_range && !is_increase {
+            // in range but decrease liquidity (mainl from txs)
             self.active_liquidity -= U256::from(net_liquidity)
         }
     }
@@ -348,6 +349,11 @@ impl LiquidityArray {
                 amount_b_in_range
             };
 
+            println!(
+                "PASSED HERE?? {} {} {}",
+                max_in, remaining_amount, current_tick
+            );
+
             // fee_remaining_amount has to be correctly adjusted to distribute at separate ticks.
             let step_amount = std::cmp::min(remaining_amount, max_in);
             let step_fee = (remaining_fee * step_amount) / remaining_amount;
@@ -427,7 +433,6 @@ impl LiquidityArray {
 
                     // Update fee growth global
                     self.fee_growth_global_b += fee_growth;
-
                     relevant_tick.fee_growth_outside_b =
                         self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
@@ -438,17 +443,20 @@ impl LiquidityArray {
                         current_sqrt_price,
                         upper_sqrt_price,
                     );
+
                     amount_out += amount_a;
                 }
 
-                // Update active liquidity
-                let positive_net_liq = relevant_tick.net_liquidity > 0;
+                println!(
+                    "ARE WE OVERFLOWING HERE??? {} {} ",
+                    self.active_liquidity, relevant_tick.net_liquidity,
+                );
 
-                if positive_net_liq {
-                    self.active_liquidity -= U256::from(relevant_tick.net_liquidity as u128)
+                // manually add/subtract since its unsigned int.
+                if relevant_tick.net_liquidity > 0 {
+                    self.active_liquidity += U256::from(relevant_tick.net_liquidity as u128)
                 } else {
-                    // we are manually canceling out two minuses
-                    self.active_liquidity += U256::from(relevant_tick.net_liquidity.unsigned_abs())
+                    self.active_liquidity -= U256::from(relevant_tick.net_liquidity.unsigned_abs())
                 }
 
                 // Update initialized tick
