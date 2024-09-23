@@ -5,8 +5,10 @@ use crate::models::positions_model::{ClosedPositionModel, LivePositionModel};
 use crate::models::transactions_model::TransactionModelFromDB;
 use crate::repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use crate::utils::decode::{
-    decode_open_position_data, find_encoded_inner_instruction, OPEN_POSITION_DISCRIMINANT,
+    decode_hawksight_open_position_data, decode_open_position_data, find_encoded_inner_instruction,
+    OPEN_POSITION_HAWKSIGHT_DISCRIMINANT, OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT,
 };
+use crate::utils::hawksight_parsing_tx::HawksightParser;
 use crate::utils::transaction_utils::{extract_common_data, retry_with_backoff};
 use anyhow::{anyhow, Context, Result};
 use futures::stream::{self, StreamExt};
@@ -63,19 +65,14 @@ impl TransactionsService {
                     .position_address
                     .clone();
 
-                println!("ENTER");
-
                 if let Some(first_signature) = self
                     .fetch_first_signature_for_position(&key_position_address)
                     .await?
                 {
-                    println!("A FIRST SIGNATURE??? {:?}", first_signature);
                     open_position_signatures.push(first_signature);
                     closed_position_ids.push(closed_position_tx.tx_id);
                 }
             }
-
-            println!("OPEN POSITION SIGS: {:?}", open_position_signatures);
 
             let signature_chunks: Vec<Vec<String>> = open_position_signatures
                 .chunks(constants::TX_BATCH_SIZE)
@@ -131,19 +128,42 @@ impl TransactionsService {
 
         for tx_data in json_arr {
             let common_data = extract_common_data(&tx_data)?;
+            let is_hawksight_tx = HawksightParser::is_hawksight_transaction(&tx_data);
 
-            let encoded_data =
-                find_encoded_inner_instruction(&tx_data, OPEN_POSITION_DISCRIMINANT)?;
+            let encoded_data = if is_hawksight_tx {
+                find_encoded_inner_instruction(&tx_data, OPEN_POSITION_HAWKSIGHT_DISCRIMINANT)
+            } else {
+                find_encoded_inner_instruction(&tx_data, OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT)
+            };
 
-            let (tick_lower, tick_upper) = decode_open_position_data(&encoded_data)?;
+            match encoded_data {
+                Ok(data) => {
+                    let (tick_lower, tick_upper) = if is_hawksight_tx {
+                        decode_hawksight_open_position_data(&data)?
+                    } else {
+                        decode_open_position_data(&data)?
+                    };
 
-            closed_position_to_insert.push(ClosedPositionModel {
-                tick_lower,
-                tick_upper,
-                position_created_at: common_data.block_time_utc,
-                // in open position transactions in ORCA, the address is always in 4th position
-                address: common_data.account_keys[3].clone(),
-            })
+                    closed_position_to_insert.push(ClosedPositionModel {
+                        tick_lower,
+                        tick_upper,
+                        position_created_at: common_data.block_time_utc,
+                        address: if is_hawksight_tx {
+                            // in open position transactions in HAWKSIGHT ORCA, the address is always in 6th position
+                            common_data.account_keys[5].trim_matches('"').to_string()
+                        } else {
+                            // in open position transactions in ORCA, the address is always in 4th position
+                            common_data.account_keys[3].trim_matches('"').to_string()
+                        },
+                    });
+                }
+                Err(_) => {
+                    println!(
+                        "NO ENCODING LOGIC FOR TRANSACTION: {}",
+                        common_data.signature
+                    );
+                }
+            }
         }
 
         // Start a transaction
@@ -178,12 +198,10 @@ impl TransactionsService {
         let limit = 1000;
 
         loop {
-            println!("ENTER 2: {}", key_position_address);
-
             let signatures = retry_with_backoff(
                 || {
                     self.tx_api.fetch_transaction_signatures(
-                        key_position_address.trim_matches('"'), // JSON string needs to be trimmed before passing into the API
+                        key_position_address,
                         limit,
                         before.as_deref(),
                     )
@@ -194,8 +212,6 @@ impl TransactionsService {
             )
             .await
             .context("Failed to fetch signatures")?;
-
-            println!("SIGS FETCHED: {:?}", signatures);
 
             if signatures.is_empty() {
                 return Ok(None); // No more signatures found
