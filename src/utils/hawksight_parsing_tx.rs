@@ -20,6 +20,7 @@ pub struct PoolInfo {
 }
 
 // This hawksight parser ONLY parses auto compound which happens very often. There are other transactions it does but we only parse this one so far.
+// Since tick upper and lower are provided in auto_compounding or any liq tx, we can ignore closePosition case here.
 impl HawksightParser {
     pub fn is_hawksight_transaction(transaction: &Value) -> bool {
         transaction["transaction"]["message"]["accountKeys"]
@@ -30,7 +31,7 @@ impl HawksightParser {
             })
     }
 
-    pub fn parse_hawksight_program(
+    pub fn parse_hawksight_auto_compounder(
         transaction: &Value,
         pool_info: &PoolInfo,
         common_data: &CommonTransactionData,
@@ -207,7 +208,8 @@ impl HawksightParser {
             liquidity_amount: liquidity_amount.to_string(),
             tick_lower,
             tick_upper,
-            possible_positions: account_keys,
+            // on hawksight parser, the position in acc keys is always on the 6th position.
+            position_address: account_keys[5].clone(),
         })
     }
 }
@@ -260,6 +262,8 @@ mod tests {
                 "message": {
                     "accountKeys": [
                         "HAWK3BVnwptKRFYfVoVGhBc2TYxpyG9jmAbkHeW9tyKE",
+                        "HAWK3BVnwptKRFYfVoVGhBc2TYxpyG9jmAbkHeW9tyKE",
+                        "HAWK3BVnwptKRFYfVoVGhBc2TYxpyG9jmAbkHeW9tyKE",
                         "dche7M2764e8AxNihBdn7uffVzZvTBNeL8x4LZg5E2c",
                         "HN5jKXfzyg6KXaq6X8GxYyPH1WQtWHYx4zN2DwFvoPAi",
                         "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q"
@@ -288,8 +292,11 @@ mod tests {
                 .collect(),
         };
 
-        let result =
-            HawksightParser::parse_hawksight_program(&transaction_json, &pool_info, &common_data);
+        let result = HawksightParser::parse_hawksight_auto_compounder(
+            &transaction_json,
+            &pool_info,
+            &common_data,
+        );
         assert!(result.is_ok());
 
         let parsed_transactions = result.unwrap();
@@ -335,12 +342,10 @@ mod tests {
             assert_eq!(liquidity_data.liquidity_amount, "4153033");
             assert_eq!(liquidity_data.tick_lower, Some(-21752));
             assert_eq!(liquidity_data.tick_upper, Some(-15560));
-            assert!(liquidity_data
-                .possible_positions
-                .contains(&"HAWK3BVnwptKRFYfVoVGhBc2TYxpyG9jmAbkHeW9tyKE".to_string()));
-            assert!(liquidity_data
-                .possible_positions
-                .contains(&"FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q".to_string()));
+            assert_eq!(
+                liquidity_data.position_address,
+                "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q".to_string()
+            );
         } else {
             panic!("Expected IncreaseLiquidity data");
         }

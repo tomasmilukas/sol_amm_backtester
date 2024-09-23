@@ -1,6 +1,6 @@
 use crate::api::transactions_api::{SignatureInfo, TransactionApi};
 use crate::models::transactions_model::{
-    LiquidityData, SwapData, TransactionData, TransactionModel,
+    ClosePositionData, LiquidityData, SwapData, TransactionData, TransactionModel,
 };
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_sync_amm_service::{constants, AMMService};
@@ -9,7 +9,7 @@ use crate::utils::decode::{
     INCREASE_LIQUIDITY_DISCRIMINANT,
 };
 use crate::utils::hawksight_parsing_tx::{HawksightParser, PoolInfo};
-use crate::utils::transaction_utils::retry_with_backoff;
+use crate::utils::transaction_utils::{extract_common_data, retry_with_backoff};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -31,6 +31,7 @@ pub struct OrcaStandardAMM {
     token_b_decimals: i16,
 }
 
+#[derive(Debug)]
 pub struct CommonTransactionData {
     pub signature: String,
     pub block_time: i64,
@@ -109,38 +110,12 @@ impl OrcaStandardAMM {
                 return Ok("DecreaseLiquidity".to_string());
             } else if message.contains("Instruction: DecreaseLiquidityV2") {
                 return Ok("DecreaseLiquidityV2".to_string());
+            } else if message.contains("Instruction: ClosePosition") {
+                return Ok("ClosePosition".to_string());
             }
         }
 
         Err(anyhow!("Unable to determine transaction type"))
-    }
-
-    fn extract_common_data(&self, tx_data: &Value) -> Result<CommonTransactionData> {
-        let signature = tx_data["transaction"]["signatures"][0]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?
-            .to_string();
-
-        let block_time = tx_data["blockTime"]
-            .as_i64()
-            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
-
-        let block_time_utc = DateTime::<Utc>::from_timestamp(block_time, 0)
-            .ok_or_else(|| anyhow::anyhow!("Missing logMessages"))?;
-
-        let account_keys: Vec<String> = tx_data["transaction"]["message"]["accountKeys"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Missing accountKeys"))?
-            .iter()
-            .map(|value: &serde_json::Value| value.to_string())
-            .collect::<Vec<String>>();
-
-        Ok(CommonTransactionData {
-            signature,
-            block_time,
-            block_time_utc,
-            account_keys,
-        })
     }
 
     fn get_token_balances(
@@ -188,11 +163,7 @@ impl OrcaStandardAMM {
         Ok((token_a_mint, token_a_amount, token_b_mint, token_b_amount))
     }
 
-    fn extract_liquidity_amounts(
-        &self,
-        tx_data: &Value,
-        pool_address: &str,
-    ) -> Result<(u64, u64)> {
+    fn extract_liquidity_amounts(&self, tx_data: &Value, pool_address: &str) -> Result<(u64, u64)> {
         let (_, pre_a_amount, _, pre_b_amount) =
             self.get_token_balances(tx_data, "preTokenBalances", pool_address)?;
         let (_, post_a_amount, _, post_b_amount) =
@@ -209,7 +180,7 @@ impl OrcaStandardAMM {
         tx_data: &Value,
         pool_address: &str,
     ) -> Result<TransactionModel> {
-        let common_data = self.extract_common_data(tx_data)?;
+        let common_data = extract_common_data(tx_data)?;
         let transaction_type = Self::determine_transaction_type(tx_data)?;
 
         let (amount_a, amount_b) = self.extract_liquidity_amounts(tx_data, pool_address)?;
@@ -235,7 +206,8 @@ impl OrcaStandardAMM {
                         liquidity_amount: decoded.liquidity_amount.to_string(),
                         tick_lower: None,
                         tick_upper: None,
-                        possible_positions: common_data.account_keys,
+                        // on regular orca transactions, the position is always in the 4th position. For OTHER platforms on top of orca (like hawsight) will have diff positions.
+                        position_address: common_data.account_keys[3].clone(),
                     })
                 }
                 "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
@@ -251,7 +223,8 @@ impl OrcaStandardAMM {
                         liquidity_amount: decoded.liquidity_amount.to_string(),
                         tick_lower: None,
                         tick_upper: None,
-                        possible_positions: common_data.account_keys,
+                        // on regular orca transactions, the position is always in the 4th position. For OTHER platforms on top of orca (like hawsight) will have diff positions.
+                        position_address: common_data.account_keys[3].clone(),
                     })
                 }
                 _ => return Err(anyhow::anyhow!("Unexpected transaction type")),
@@ -260,7 +233,7 @@ impl OrcaStandardAMM {
     }
 
     fn convert_swap_data(&self, tx_data: &Value, pool_address: &str) -> Result<TransactionModel> {
-        let common_data = self.extract_common_data(tx_data)?;
+        let common_data = extract_common_data(tx_data)?;
         let (token_in, token_out, amount_in, amount_out) =
             self.extract_swap_amounts(tx_data, pool_address)?;
 
@@ -388,11 +361,13 @@ impl AMMService for OrcaStandardAMM {
                     decimals_a: self.token_a_decimals,
                     decimals_b: self.token_b_decimals,
                 };
-                let common_data = self.extract_common_data(&transaction)?;
+                let common_data = extract_common_data(&transaction)?;
 
-                if let Ok(hawksight_transactions) =
-                    HawksightParser::parse_hawksight_program(&transaction, &pool_info, &common_data)
-                {
+                if let Ok(hawksight_transactions) = HawksightParser::parse_hawksight_auto_compounder(
+                    &transaction,
+                    &pool_info,
+                    &common_data,
+                ) {
                     transactions.extend(hawksight_transactions);
                 }
             } else {
@@ -418,6 +393,23 @@ impl AMMService for OrcaStandardAMM {
                         {
                             transactions.push(liquidity_data);
                         }
+                    }
+                    "ClosePosition" => {
+                        let common_data = extract_common_data(&transaction)?;
+
+                        let tx = TransactionModel {
+                            signature: common_data.signature,
+                            pool_address: pool_address.to_string(),
+                            block_time: common_data.block_time,
+                            block_time_utc: common_data.block_time_utc,
+                            transaction_type: Self::determine_transaction_type(&transaction)?,
+                            ready_for_backtesting: false,
+                            data: TransactionData::ClosePosition(ClosePositionData {
+                                position_address: common_data.account_keys[3].clone(), // on regular orca transactions, the position is always in the 4th position.
+                            }),
+                        };
+
+                        transactions.push(tx);
                     }
                     _ => {}
                 }

@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::{
     models::{
-        pool_model::PoolModel, positions_model::PositionModel,
+        pool_model::PoolModel, positions_model::LivePositionModel,
         transactions_model::TransactionModelFromDB,
     },
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
@@ -16,7 +16,7 @@ use super::liquidity_array::LiquidityArray;
 
 pub fn create_full_liquidity_range(
     tick_spacing: i16,
-    positions: Vec<PositionModel>,
+    positions: Vec<LivePositionModel>,
     fee_rate: i16,
 ) -> Result<LiquidityArray> {
     let min_tick = -500_000;

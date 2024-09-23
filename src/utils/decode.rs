@@ -13,6 +13,8 @@ use crate::models::positions_model::{Position, PositionRewardInfo};
 pub const INCREASE_LIQUIDITY_DISCRIMINANT: &str = "3KLKPPgnNhb";
 pub const DECREASE_LIQUIDITY_DISCRIMINANT: &str = "8xY8jsAzTgX";
 pub const HAWKSIGHT_SWAP_DISCRIMINANT: &str = "59p8WydnSZt";
+pub const OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT: &str = "B3T3AnPs3Bbw";
+pub const OPEN_POSITION_HAWKSIGHT_DISCRIMINANT: &str = "2GrSomweg35m";
 
 #[derive(Debug, PartialEq)]
 pub struct IncreaseLiquidityData {
@@ -236,6 +238,42 @@ pub fn decode_hawksight_swap_data(encoded_data: &str) -> Result<HawksightSwapDat
     })
 }
 
+pub fn decode_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
+    // Decode the Base58 string
+    let data = bs58::decode(encoded_data).into_vec()?;
+    let mut rdr = Cursor::new(data);
+
+    // Skip the first 8 bytes (instruction discriminator)
+    rdr.set_position(8);
+
+    // Skip the bumps (2 bytes)
+    rdr.set_position(rdr.position() + 2);
+
+    // Read the tick indices
+    let tick_lower_index = rdr.read_i32::<LittleEndian>()?;
+    let tick_upper_index = rdr.read_i32::<LittleEndian>()?;
+
+    Ok((tick_lower_index, tick_upper_index))
+}
+
+pub fn decode_hawksight_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
+    // Decode the Base58 string
+    let data = bs58::decode(encoded_data).into_vec()?;
+    let mut rdr = Cursor::new(data);
+
+    // Skip the first 8 bytes (instruction discriminator)
+    rdr.set_position(8);
+
+    // Read the position bump
+    let position_bump = rdr.read_u8()?;
+
+    // Read the tick indices
+    let tick_lower_index = rdr.read_i32::<LittleEndian>()?;
+    let tick_upper_index = rdr.read_i32::<LittleEndian>()?;
+
+    Ok((tick_lower_index, tick_upper_index))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +349,22 @@ mod tests {
             decoded.amount_specified_is_input
         );
         println!("A to B: {}", decoded.a_to_b);
+    }
+
+    #[test]
+    fn test_decode_open_position_data() {
+        let encoded_data = "B3T3AnPs3BbwvCRjFvmUAzk5t";
+        let result = decode_open_position_data(encoded_data);
+
+        assert!(result.is_ok());
+
+        let decoded = result.unwrap();
+        let expected = (-20328, -19732);
+
+        assert_eq!(decoded, expected);
+
+        println!("Decoded OpenPosition Data:");
+        println!("Lower Tick Index: {}", decoded.0);
+        println!("Upper Tick Index: {}", decoded.1);
     }
 }
