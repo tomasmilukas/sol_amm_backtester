@@ -31,6 +31,7 @@ pub struct OrcaStandardAMM {
     token_b_decimals: i16,
 }
 
+#[derive(Debug)]
 pub struct CommonTransactionData {
     pub signature: String,
     pub block_time: i64,
@@ -362,9 +363,11 @@ impl AMMService for OrcaStandardAMM {
                 };
                 let common_data = extract_common_data(&transaction)?;
 
-                if let Ok(hawksight_transactions) =
-                    HawksightParser::parse_hawksight_program(&transaction, &pool_info, &common_data)
-                {
+                if let Ok(hawksight_transactions) = HawksightParser::parse_hawksight_auto_compounder(
+                    &transaction,
+                    &pool_info,
+                    &common_data,
+                ) {
                     transactions.extend(hawksight_transactions);
                 }
             } else {

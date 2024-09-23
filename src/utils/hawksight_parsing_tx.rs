@@ -31,7 +31,7 @@ impl HawksightParser {
             })
     }
 
-    pub fn parse_hawksight_program(
+    pub fn parse_hawksight_auto_compounder(
         transaction: &Value,
         pool_info: &PoolInfo,
         common_data: &CommonTransactionData,
@@ -292,8 +292,11 @@ mod tests {
                 .collect(),
         };
 
-        let result =
-            HawksightParser::parse_hawksight_program(&transaction_json, &pool_info, &common_data);
+        let result = HawksightParser::parse_hawksight_auto_compounder(
+            &transaction_json,
+            &pool_info,
+            &common_data,
+        );
         assert!(result.is_ok());
 
         let parsed_transactions = result.unwrap();

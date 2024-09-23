@@ -79,19 +79,20 @@ impl PositionsRepo {
         let result = sqlx::query(
             r#"
                 INSERT INTO closed_positions (
-                    address, pool_address, tick_lower, tick_upper, version
+                    address, pool_address, tick_lower, tick_upper, position_created_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (address, pool_address, version) DO UPDATE SET
-                    liquidity = EXCLUDED.liquidity,
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (address, pool_address) DO UPDATE SET
                     tick_lower = EXCLUDED.tick_lower,
-                    tick_upper = EXCLUDED.tick_upper
+                    tick_upper = EXCLUDED.tick_upper,
+                    position_created_at = EXCLUDED.position_created_at
             "#,
         )
         .bind(&position.address)
         .bind(pool_address)
         .bind(position.tick_lower)
         .bind(position.tick_upper)
+        .bind(position.position_created_at)
         .execute(transaction)
         .await;
 

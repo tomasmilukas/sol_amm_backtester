@@ -77,9 +77,6 @@ impl TransactionApi {
             params["before"] = serde_json::json!(before_sig);
         }
 
-        println!("FULL URL: {:?}", url);
-        println!("POOL ADDY AND PARAMS: {:?} {:?}", pool_address, params);
-
         let response = self
             .client
             .post(&url)

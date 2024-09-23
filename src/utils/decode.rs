@@ -13,7 +13,8 @@ use crate::models::positions_model::{Position, PositionRewardInfo};
 pub const INCREASE_LIQUIDITY_DISCRIMINANT: &str = "3KLKPPgnNhb";
 pub const DECREASE_LIQUIDITY_DISCRIMINANT: &str = "8xY8jsAzTgX";
 pub const HAWKSIGHT_SWAP_DISCRIMINANT: &str = "59p8WydnSZt";
-pub const OPEN_POSITION_DISCRIMINANT: &str = "B3T3AnPs3Bbw";
+pub const OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT: &str = "B3T3AnPs3Bbw";
+pub const OPEN_POSITION_HAWKSIGHT_DISCRIMINANT: &str = "2GrSomweg35m";
 
 #[derive(Debug, PartialEq)]
 pub struct IncreaseLiquidityData {
@@ -247,6 +248,24 @@ pub fn decode_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
 
     // Skip the bumps (2 bytes)
     rdr.set_position(rdr.position() + 2);
+
+    // Read the tick indices
+    let tick_lower_index = rdr.read_i32::<LittleEndian>()?;
+    let tick_upper_index = rdr.read_i32::<LittleEndian>()?;
+
+    Ok((tick_lower_index, tick_upper_index))
+}
+
+pub fn decode_hawksight_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
+    // Decode the Base58 string
+    let data = bs58::decode(encoded_data).into_vec()?;
+    let mut rdr = Cursor::new(data);
+
+    // Skip the first 8 bytes (instruction discriminator)
+    rdr.set_position(8);
+
+    // Read the position bump
+    let position_bump = rdr.read_u8()?;
 
     // Read the tick indices
     let tick_lower_index = rdr.read_i32::<LittleEndian>()?;
