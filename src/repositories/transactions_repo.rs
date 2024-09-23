@@ -290,7 +290,7 @@ impl TransactionRepo {
         self.row_to_transaction_model(&row)
     }
 
-    pub async fn get_closed_position_transactions_to_update(
+    pub async fn get_transactions_to_create_closed_positions(
         &self,
         pool_address: &str,
         last_tx_id: i64,
@@ -306,7 +306,7 @@ impl TransactionRepo {
                     tx_id > $1 
                     AND pool_address = $2
                     AND ready_for_backtesting = FALSE
-                    AND transaction_type = 'ClosePosition'
+                    AND transaction_type IN ('IncreaseLiquidity', 'DecreaseLiquidity', 'ClosePosition')
                 ORDER BY tx_id
                 LIMIT $3
             "#,

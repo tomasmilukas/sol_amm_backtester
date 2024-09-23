@@ -137,30 +137,30 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     // Sync transactions
     let end_time = Utc::now();
     let start_time = end_time - Duration::days(config.sync_days);
-    match amm_service
-        .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
-        .await
-    {
-        Ok(_f) => println!("Synced transactions successfully"),
-        Err(e) => eprintln!("Error syncing transactions: {}", e),
-    }
+    // match amm_service
+    //     .sync_transactions(&config.pool_address, start_time, config.sync_mode.clone())
+    //     .await
+    // {
+    //     Ok(_f) => println!("Synced transactions successfully"),
+    //     Err(e) => eprintln!("Error syncing transactions: {}", e),
+    // }
 
     // Update transactions since not all data can be retrieved during sync. Updates will happen using position_data, to fill in liquidity info.
     let transactions_service = TransactionsService::new(tx_repo, tx_api, positions_repo);
 
-    match transactions_service
-        .create_closed_positions_from_txs(&config.pool_address)
-        .await
-    {
-        Ok(_) => println!("Created all the closed positions for liquidity info"),
-        Err(e) => eprintln!("Error updating txs: {}", e),
-    }
+    // match transactions_service
+    //     .create_closed_positions_from_txs(&config.pool_address)
+    //     .await
+    // {
+    //     Ok(_) => println!("Created all the closed positions for liquidity info"),
+    //     Err(e) => eprintln!("Error updating txs: {}", e),
+    // }
 
     match transactions_service
         .update_and_fill_liquidity_transactions(&config.pool_address)
         .await
     {
-        Ok(_) => println!("Updated liquidity transactions successfully"),
+        Ok(_) => println!("Updated ticks in liquidity transactions successfully"),
         Err(e) => eprintln!("Error updating txs: {}", e),
     }
 
@@ -203,8 +203,13 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         .await?;
 
     // Create the liquidity range "at present" from db.
-    let liquidity_range_arr =
-        create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
+    let liquidity_range_arr = create_full_liquidity_range(
+        pool_data.tick_spacing,
+        positions_data,
+        pool_data.clone(),
+        tx_to_sync_from.clone(),
+        pool_data.fee_rate,
+    )?;
 
     println!("Current liquidity range recreated! Time to sync it backwards for the backtester.");
 
