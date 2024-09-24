@@ -114,12 +114,22 @@ impl Backtest {
         pool_address: &str,
         batch_size: i64,
     ) -> Result<(), SyncError> {
+        // Initialize the cursor with the start_tx_id
         let mut cursor = Some(start_tx_id);
         let starting_price = self.liquidity_arr.current_sqrt_price;
 
-        while cursor.is_some() && cursor.unwrap() <= end_tx_id {
+        // Init strategy
+        let actions = self.strategy.initialize_strategy(
+            self.start_info.token_a_amount,
+            self.start_info.token_b_amount,
+        );
+
+        self.execute_actions(actions)
+            .map_err(|e| SyncError::Other(e.to_string()))?;
+
+        while cursor.is_some() && cursor.unwrap() >= end_tx_id {
             let transactions = transaction_repo
-                .fetch_transactions(pool_address, cursor, batch_size, OrderDirection::Ascending)
+                .fetch_transactions(pool_address, cursor, batch_size, OrderDirection::Descending)
                 .await
                 .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
@@ -127,7 +137,8 @@ impl Backtest {
                 break;
             }
 
-            for transaction in transactions.iter() {
+            // Process transactions in reverse order (newest to oldest)
+            for transaction in transactions.iter().rev() {
                 match transaction.transaction_type.as_str() {
                     "IncreaseLiquidity" | "DecreaseLiquidity" => {
                         let liquidity_data = transaction
@@ -141,7 +152,7 @@ impl Backtest {
                         self.liquidity_arr.update_liquidity(
                             liquidity_data.tick_lower.unwrap(),
                             liquidity_data.tick_upper.unwrap(),
-                            liquidity_data.liquidity_amount.parse::<u128>().unwrap() as i128,
+                            liquidity_data.liquidity_amount.parse::<i128>().unwrap(),
                             is_increase,
                         );
                     }
@@ -164,230 +175,235 @@ impl Backtest {
                     .strategy
                     .update(&self.liquidity_arr, transaction.clone());
 
-                for action in actions {
-                    self.execute_action(action)
-                        .map_err(|e| SyncError::Other(e.to_string()))?;
-                }
+                self.execute_actions(actions)
+                    .map_err(|e| SyncError::Other(e.to_string()))?;
             }
 
-            cursor = transactions.last().map(|t| t.tx_id + 1);
+            // Update cursor for the next iteration
+            cursor = transactions.last().and_then(|t| {
+                if t.tx_id > end_tx_id {
+                    Some(t.tx_id - 1)
+                } else {
+                    None
+                }
+            });
 
-            if transactions.len() < batch_size as usize || cursor.unwrap() > end_tx_id {
+            if transactions.len() < batch_size as usize {
                 break;
             }
         }
 
-        self.strategy.finalize_strategy(starting_price);
+        let actions = self.strategy.finalize_strategy(starting_price);
+
+        self.execute_actions(actions)
+            .map_err(|e| SyncError::Other(e.to_string()))?;
 
         Ok(())
     }
 
-    fn execute_action(&mut self, action: Action) -> Result<(), BacktestError> {
-        match action {
-            Action::ProvideLiquidity {
-                position_id,
-                liquidity_to_add,
-            } => {
-                todo!();
-            }
-            Action::RemoveLiquidity {
-                position_id,
-                liquidity_to_remove,
-            } => {
-                todo!();
-            }
-            Action::Swap { amount_in, is_sell } => {
-                self.liquidity_arr.simulate_swap(amount_in, is_sell)?;
-
-                Ok(())
-            }
-            Action::Rebalance {
-                position_id,
-                rebalance_ratio,
-                new_lower_tick,
-                new_upper_tick,
-            } => {
-                let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
-
-                self.wallet.amount_a_fees_collected = fees_a;
-                self.wallet.amount_b_fees_collected = fees_b;
-
-                let position = self.liquidity_arr.remove_owners_position(&position_id)?;
-
-                let (amount_a, amount_b) = calculate_amounts(
-                    U256::from(position.liquidity),
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(position.lower_tick),
-                    tick_to_sqrt_price_u256(position.upper_tick),
-                );
-                let mut amount_a_with_fees = amount_a + fees_a;
-                let mut amount_b_with_fees = amount_b + fees_b;
-
-                let (amount_to_sell, is_sell) = calculate_rebalance_amount(
-                    amount_a_with_fees,
-                    amount_b_with_fees,
-                    self.liquidity_arr.current_sqrt_price,
-                    U256::from((rebalance_ratio * Q64.as_u128() as f64) as u128),
-                );
-
-                // TODO: Optimize for small imbalances to avoid unnecessary swaps. Also add slippage later.
-                // For now, we'll proceed with the swap even for small amounts
-                let amount_out = self.liquidity_arr.simulate_swap(amount_to_sell, is_sell)?;
-
-                if is_sell {
-                    amount_a_with_fees -= amount_to_sell;
-                    amount_b_with_fees += amount_out;
-                    self.wallet.amount_a_fees_collected += fees_a;
-                } else {
-                    amount_a_with_fees -= amount_to_sell;
-                    amount_b_with_fees += amount_out;
-                    self.wallet.amount_b_fees_collected += fees_b;
+    fn execute_actions(&mut self, actions: Vec<Action>) -> Result<(), BacktestError> {
+        for action in actions {
+            match action {
+                Action::ProvideLiquidity {
+                    position_id,
+                    liquidity_to_add,
+                } => {
+                    todo!();
                 }
-
-                let new_liquidity = calculate_liquidity(
-                    amount_a_with_fees,
-                    amount_b_with_fees,
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(new_lower_tick),
-                    tick_to_sqrt_price_u256(new_upper_tick),
-                );
-
-                // Re-provide liquidity with the rebalanced amounts
-                self.liquidity_arr.add_owners_position(
-                    OwnersPosition {
-                        owner: position.owner,
-                        lower_tick: new_lower_tick,
-                        upper_tick: new_upper_tick,
-                        liquidity: new_liquidity.as_u128() as i128,
-                        fee_growth_inside_a_last: U256::zero(),
-                        fee_growth_inside_b_last: U256::zero(),
-                    },
-                    position_id.clone(),
-                );
-
-                // Log the rebalancing action
-                println!(
-                    "Rebalanced position {}: New liquidity: {}, Amount A: {}, Amount B: {}",
-                    position_id, new_liquidity, amount_a_with_fees, amount_b_with_fees
-                );
-
-                Ok(())
-            }
-            Action::CreatePosition {
-                position_id,
-                lower_tick,
-                upper_tick,
-                amount_a,
-                amount_b,
-            } => {
-                if amount_a > self.wallet.amount_token_a {
-                    return Err(BacktestError::InsufficientBalance {
-                        requested: amount_a,
-                        available: self.wallet.amount_token_a,
-                        token: self.wallet.token_a_addr.clone(),
-                    });
+                Action::RemoveLiquidity {
+                    position_id,
+                    liquidity_to_remove,
+                } => {
+                    todo!();
                 }
-
-                if amount_b > self.wallet.amount_token_b {
-                    return Err(BacktestError::InsufficientBalance {
-                        requested: amount_b,
-                        available: self.wallet.amount_token_b,
-                        token: self.wallet.token_b_addr.clone(),
-                    });
+                Action::Swap { amount_in, is_sell } => {
+                    self.liquidity_arr.simulate_swap(amount_in, is_sell)?;
                 }
+                Action::Rebalance {
+                    position_id,
+                    rebalance_ratio,
+                    new_lower_tick,
+                    new_upper_tick,
+                } => {
+                    let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
 
-                let liquidity = calculate_liquidity(
+                    self.wallet.amount_a_fees_collected = fees_a;
+                    self.wallet.amount_b_fees_collected = fees_b;
+
+                    let position = self.liquidity_arr.remove_owners_position(&position_id)?;
+
+                    let (amount_a, amount_b) = calculate_amounts(
+                        U256::from(position.liquidity),
+                        self.liquidity_arr.current_sqrt_price,
+                        tick_to_sqrt_price_u256(position.lower_tick),
+                        tick_to_sqrt_price_u256(position.upper_tick),
+                    );
+                    let mut amount_a_with_fees = amount_a + fees_a;
+                    let mut amount_b_with_fees = amount_b + fees_b;
+
+                    let (amount_to_sell, is_sell) = calculate_rebalance_amount(
+                        amount_a_with_fees,
+                        amount_b_with_fees,
+                        self.liquidity_arr.current_sqrt_price,
+                        U256::from((rebalance_ratio * Q64.as_u128() as f64) as u128),
+                    );
+
+                    // TODO: Optimize for small imbalances to avoid unnecessary swaps. Also add slippage later.
+                    // For now, we'll proceed with the swap even for small amounts
+                    let amount_out = self.liquidity_arr.simulate_swap(amount_to_sell, is_sell)?;
+
+                    if is_sell {
+                        amount_a_with_fees -= amount_to_sell;
+                        amount_b_with_fees += amount_out;
+                        self.wallet.amount_a_fees_collected += fees_a;
+                    } else {
+                        amount_a_with_fees -= amount_to_sell;
+                        amount_b_with_fees += amount_out;
+                        self.wallet.amount_b_fees_collected += fees_b;
+                    }
+
+                    let new_liquidity = calculate_liquidity(
+                        amount_a_with_fees,
+                        amount_b_with_fees,
+                        self.liquidity_arr.current_sqrt_price,
+                        tick_to_sqrt_price_u256(new_lower_tick),
+                        tick_to_sqrt_price_u256(new_upper_tick),
+                    );
+
+                    // Re-provide liquidity with the rebalanced amounts
+                    self.liquidity_arr.add_owners_position(
+                        OwnersPosition {
+                            owner: position.owner,
+                            lower_tick: new_lower_tick,
+                            upper_tick: new_upper_tick,
+                            liquidity: new_liquidity.as_u128() as i128,
+                            fee_growth_inside_a_last: U256::zero(),
+                            fee_growth_inside_b_last: U256::zero(),
+                        },
+                        position_id.clone(),
+                    );
+
+                    // Log the rebalancing action
+                    println!(
+                        "Rebalanced position {}: New liquidity: {}, Amount A: {}, Amount B: {}",
+                        position_id, new_liquidity, amount_a_with_fees, amount_b_with_fees
+                    );
+                }
+                Action::CreatePosition {
+                    position_id,
+                    lower_tick,
+                    upper_tick,
                     amount_a,
                     amount_b,
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(lower_tick),
-                    tick_to_sqrt_price_u256(upper_tick),
-                );
+                } => {
+                    if amount_a > self.wallet.amount_token_a {
+                        return Err(BacktestError::InsufficientBalance {
+                            requested: amount_a,
+                            available: self.wallet.amount_token_a,
+                            token: self.wallet.token_a_addr.clone(),
+                        });
+                    }
 
-                self.liquidity_arr.add_owners_position(
-                    OwnersPosition {
-                        owner: String::from(""),
-                        lower_tick,
-                        upper_tick,
-                        liquidity: liquidity.as_u128() as i128,
-                        fee_growth_inside_a_last: U256::zero(),
-                        fee_growth_inside_b_last: U256::zero(),
-                    },
+                    if amount_b > self.wallet.amount_token_b {
+                        return Err(BacktestError::InsufficientBalance {
+                            requested: amount_b,
+                            available: self.wallet.amount_token_b,
+                            token: self.wallet.token_b_addr.clone(),
+                        });
+                    }
+
+                    let liquidity = calculate_liquidity(
+                        amount_a,
+                        amount_b,
+                        self.liquidity_arr.current_sqrt_price,
+                        tick_to_sqrt_price_u256(lower_tick),
+                        tick_to_sqrt_price_u256(upper_tick),
+                    );
+
+                    self.liquidity_arr.add_owners_position(
+                        OwnersPosition {
+                            owner: String::from(""),
+                            lower_tick,
+                            upper_tick,
+                            liquidity: liquidity.as_u128() as i128,
+                            fee_growth_inside_a_last: U256::zero(),
+                            fee_growth_inside_b_last: U256::zero(),
+                        },
+                        position_id,
+                    );
+
+                    self.wallet.amount_token_a -= amount_a;
+                    self.wallet.amount_token_b -= amount_b;
+                }
+                Action::FinalizeStrategy {
                     position_id,
-                );
+                    starting_sqrt_price,
+                } => {
+                    let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
+                    let position = self.liquidity_arr.remove_owners_position(&position_id)?;
 
-                self.wallet.amount_token_a -= amount_a;
-                self.wallet.amount_token_b -= amount_b;
+                    self.wallet.amount_a_fees_collected += fees_a;
+                    self.wallet.amount_b_fees_collected += fees_b;
 
-                Ok(())
-            }
-            Action::FinalizeStrategy {
-                position_id,
-                starting_sqrt_price,
-            } => {
-                let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
-                let position = self.liquidity_arr.remove_owners_position(&position_id)?;
+                    let (amount_a, amount_b) = calculate_amounts(
+                        U256::from(position.liquidity),
+                        self.liquidity_arr.current_sqrt_price,
+                        tick_to_sqrt_price_u256(position.lower_tick),
+                        tick_to_sqrt_price_u256(position.upper_tick),
+                    );
 
-                self.wallet.amount_a_fees_collected += fees_a;
-                self.wallet.amount_b_fees_collected += fees_b;
+                    self.wallet.amount_token_a += amount_a;
+                    self.wallet.amount_token_b += amount_b;
 
-                let (amount_a, amount_b) = calculate_amounts(
-                    U256::from(position.liquidity),
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(position.lower_tick),
-                    tick_to_sqrt_price_u256(position.upper_tick),
-                );
+                    // Calculate initial value in terms of token A
+                    let initial_price = (starting_sqrt_price * starting_sqrt_price) / Q64;
+                    let initial_value_a = self.start_info.token_a_amount
+                        + (self.start_info.token_b_amount * Q64) / initial_price;
 
-                self.wallet.amount_token_a += amount_a;
-                self.wallet.amount_token_b += amount_b;
+                    // Calculate the final value in terms of token A
+                    let current_price = (self.liquidity_arr.current_sqrt_price
+                        * self.liquidity_arr.current_sqrt_price)
+                        / Q64;
+                    let final_value_a = (self.wallet.amount_token_a
+                        + self.wallet.amount_a_fees_collected)
+                        + ((self.wallet.amount_token_b + self.wallet.amount_b_fees_collected)
+                            * Q64)
+                            / current_price;
 
-                // Calculate initial value in terms of token A
-                let initial_price = (starting_sqrt_price * starting_sqrt_price) / Q64;
-                let initial_value_a = self.start_info.token_a_amount
-                    + (self.start_info.token_b_amount * Q64) / initial_price;
+                    // Calculate profit
+                    let profit = final_value_a.saturating_sub(initial_value_a);
+                    let loss = initial_value_a.saturating_sub(final_value_a);
 
-                // Calculate the final value in terms of token A
-                let current_price = (self.liquidity_arr.current_sqrt_price
-                    * self.liquidity_arr.current_sqrt_price)
-                    / Q64;
-                let final_value_a = (self.wallet.amount_token_a
-                    + self.wallet.amount_a_fees_collected)
-                    + ((self.wallet.amount_token_b + self.wallet.amount_b_fees_collected) * Q64)
-                        / current_price;
+                    // Determine if it's a profit or loss
+                    let is_profit = final_value_a > initial_value_a;
 
-                // Calculate profit
-                let profit = final_value_a.saturating_sub(initial_value_a);
-                let loss = initial_value_a.saturating_sub(final_value_a);
+                    // Calculate profit or loss as a float
+                    let profit_or_loss = if is_profit {
+                        profit.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32)
+                    } else {
+                        -(loss.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32))
+                    };
 
-                // Determine if it's a profit or loss
-                let is_profit = final_value_a > initial_value_a;
+                    // Calculate percentage
+                    let profit_percentage = (profit_or_loss
+                        / (initial_value_a.as_u128() as f64
+                            / 10f64.powi(self.wallet.token_a_decimals as i32)))
+                        * 100.0;
 
-                // Calculate profit or loss as a float
-                let profit_or_loss = if is_profit {
-                    profit.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32)
-                } else {
-                    -(loss.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32))
-                };
+                    // Store results
+                    self.wallet.total_profit = profit_or_loss;
+                    self.wallet.total_profit_pct = profit_percentage;
 
-                // Calculate percentage
-                let profit_percentage = (profit_or_loss
-                    / (initial_value_a.as_u128() as f64
-                        / 10f64.powi(self.wallet.token_a_decimals as i32)))
-                    * 100.0;
-
-                // Store results
-                self.wallet.total_profit = profit_or_loss;
-                self.wallet.total_profit_pct = profit_percentage;
-
-                println!("Strategy finalized:");
-                println!("Initial value (in token A): {}", initial_value_a);
-                println!("Final value (in token A): {}", final_value_a);
-                println!("Total profit: {} token A", self.wallet.total_profit);
-                println!("Total profit percentage: {}%", self.wallet.total_profit_pct);
-
-                Ok(())
+                    println!("Strategy finalized:");
+                    println!("Initial value (in token A): {}", initial_value_a);
+                    println!("Final value (in token A): {}", final_value_a);
+                    println!("Total profit: {} token A", self.wallet.total_profit);
+                    println!("Total profit percentage: {}%", self.wallet.total_profit_pct);
+                }
             }
         }
+
+        Ok(())
     }
 }
 
@@ -431,13 +447,6 @@ mod tests {
             _order: OrderDirection,
         ) -> Result<Vec<TransactionModelFromDB>, anyhow::Error> {
             Ok(self.transactions.lock().await.clone())
-        }
-
-        async fn fetch_highest_tx_swap(
-            &self,
-            pool_address: &str,
-        ) -> Result<Option<TransactionModelFromDB>> {
-            Ok(None)
         }
     }
 
@@ -517,7 +526,7 @@ mod tests {
             amount_b: U256::from(500_000_000),
         };
 
-        backtest.execute_action(action).unwrap();
+        backtest.execute_actions(vec![action]).unwrap();
 
         assert_eq!(backtest.wallet.amount_token_a, U256::from(500_000_000));
         assert_eq!(backtest.wallet.amount_token_b, U256::from(500_000_000));
@@ -606,10 +615,7 @@ mod tests {
             },
         ];
 
-        // Execute all actions
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
+        backtest.execute_actions(all_actions).unwrap();
 
         // Get the rebalanced position
         let rebalanced_position = backtest
@@ -708,9 +714,7 @@ mod tests {
             },
         ];
 
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
+        backtest.execute_actions(all_actions).unwrap();
 
         // Assertions
         assert!(
@@ -800,9 +804,7 @@ mod tests {
             },
         ];
 
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
+        backtest.execute_actions(all_actions).unwrap();
 
         // Assertions
         assert!(
@@ -902,9 +904,7 @@ mod tests {
             },
         ];
 
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
+        backtest.execute_actions(all_actions).unwrap();
 
         // Assertions
         assert!(

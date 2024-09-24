@@ -63,6 +63,8 @@ impl TransactionsService {
                 break; // No more transactions to process
             }
 
+            println!("NEW TXS: {}", closed_position_transactions.len());
+
             let mut open_position_signatures: Vec<SignatureInfo> = Vec::new();
             let mut closed_position_ids: Vec<i64> = Vec::new();
             let mut processed_positions: HashSet<String> = HashSet::new();
@@ -108,6 +110,11 @@ impl TransactionsService {
                 }
             }
 
+            println!(
+                "OPEN POSITION SIGNATURES TO PROCESS: {}",
+                open_position_signatures.len()
+            );
+
             let signature_chunks: Vec<Vec<String>> = open_position_signatures
                 .chunks(constants::TX_BATCH_SIZE)
                 .map(|chunk| chunk.iter().map(|sig| sig.signature.clone()).collect())
@@ -132,6 +139,8 @@ impl TransactionsService {
                 .flat_map(|result| stream::iter(result.unwrap_or_default()))
                 .collect()
                 .await;
+
+            println!("TXS TO DECODE AND INSERT: {}", all_tx_data.len());
 
             // Decode and insert the data into the db.
             let _ = self
@@ -369,18 +378,6 @@ impl TransactionsService {
                         updated_data.tick_upper = Some(position.tick_upper);
                     }
 
-                    if liquidity_data.position_address
-                        == "weGhsejfiXm7WsmtPQ4nxfH2geSgBmDmG72fcLxMLUw"
-                    {
-                        println!("UPDATING THIS NASTY TX");
-                        println!("POSITION ADDRESS: {}", &liquidity_data.position_address);
-                        println!("NEW DATA: {:?}", updated_data);
-                        println!(
-                            "IN MAP: {:?}",
-                            position_map.get(&liquidity_data.position_address)
-                        );
-                    }
-
                     // Convert the updated data into TransactionData
                     tx.data = updated_data.into_transaction_data(&tx.transaction_type);
                     tx.ready_for_backtesting = true;
@@ -395,7 +392,7 @@ impl TransactionsService {
                 .await
                 .context("Failed to upsert updated transactions")?;
 
-            println!("Updated {} transactions", upserted_count);
+            println!("Updated ticks for {} liquidity transactions", upserted_count);
 
             // Update last_tx_id for the next iteration
             if let Some(last_tx) = updated_transactions.last() {

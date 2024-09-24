@@ -42,7 +42,12 @@ impl PositionsService {
         // Upsert positions within the transaction
         for position in positions {
             self.positions_repo
-                .upsert_live_positions_in_transaction(&mut transaction, pool_address, &position, new_version)
+                .upsert_live_positions_in_transaction(
+                    &mut transaction,
+                    pool_address,
+                    &position,
+                    new_version,
+                )
                 .await
                 .with_context(|| format!("Failed to upsert position: {}", position.address))?;
         }
@@ -60,13 +65,14 @@ impl PositionsService {
         &self,
         tx_repo: TransactionRepo,
         pool_address: &str,
-        latest_tx: TransactionModelFromDB,
     ) -> Result<(Vec<LivePositionModel>, TransactionModelFromDB)> {
         let mut current_version = self
             .positions_repo
             .get_latest_version_for_live_pool(pool_address)
             .await
             .context("Failed to get latest version")?;
+
+        let most_recent_tx = tx_repo.fetch_most_recent_swap(pool_address).await?.unwrap();
 
         let mut latest_positions = None;
 
@@ -86,8 +92,8 @@ impl PositionsService {
 
             let position_timestamp = positions.iter().map(|p| p.created_at).max().unwrap();
 
-            if latest_tx.block_time_utc >= position_timestamp {
-                // This is the case we want
+            // If transaction is in the future compared to positions, get the closest transaction to sync from.
+            if most_recent_tx.block_time_utc >= position_timestamp {
                 let transaction = tx_repo
                     .get_transaction_at_or_after_timestamp(pool_address, position_timestamp)
                     .await
@@ -106,9 +112,9 @@ impl PositionsService {
                 latest_positions.iter().map(|p| p.created_at).max().unwrap();
 
             println!("WARNING: Data gap detected. Latest transaction timestamp: {}, Earliest position timestamp: {}. Will proceed anyways.",
-                     latest_tx.block_time_utc, latest_position_timestamp);
+            most_recent_tx.block_time_utc, latest_position_timestamp);
 
-            Ok((latest_positions, latest_tx))
+            Ok((latest_positions, most_recent_tx))
         } else {
             Err(anyhow!("No positions found for the given pool address"))
         }
