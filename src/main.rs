@@ -29,17 +29,14 @@ use backtester::{
 use chrono::{Duration, Utc};
 use config::{AppConfig, StrategyType};
 use dotenv::dotenv;
-use repositories::{
-    positions_repo::PositionsRepo,
-    transactions_repo::{TransactionRepo, TransactionRepoTrait},
-};
+use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use services::{
     positions_service::PositionsService, transactions_service::TransactionsService,
     transactions_sync_amm_service::create_amm_service,
 };
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc};
-use utils::{error::SyncError, price_calcs::U256};
+use utils::price_calcs::U256;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

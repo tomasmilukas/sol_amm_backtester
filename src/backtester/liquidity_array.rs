@@ -1,4 +1,4 @@
-use std::{collections::HashMap, thread, time::Duration};
+use std::collections::HashMap;
 
 use crate::utils::{
     error::LiquidityArrayError,
@@ -278,23 +278,29 @@ impl LiquidityArray {
             self.fee_growth_global_b
         };
 
+        let lower_tick = self.data[lower_tick_index];
+        let upper_tick = self.data[upper_tick_index];
+
         let lower_fee_growth_outside = if is_token_a {
-            self.data[lower_tick_index].fee_growth_outside_a
+            lower_tick.fee_growth_outside_a
         } else {
-            self.data[lower_tick_index].fee_growth_outside_b
+            lower_tick.fee_growth_outside_b
         };
 
         let upper_fee_growth_outside = if is_token_a {
-            self.data[upper_tick_index].fee_growth_outside_a
+            upper_tick.fee_growth_outside_a
         } else {
-            self.data[upper_tick_index].fee_growth_outside_b
+            upper_tick.fee_growth_outside_b
         };
 
-        // The fees are dynamically updated every time we cross a tick to reflect the fee_growth_otuside, so they can be used to get the full picture of fees from the position.
-        if self.current_tick >= upper_tick_index as i32 {
-            global_fee_growth.saturating_sub(upper_fee_growth_outside)
-        } else if self.current_tick < lower_tick_index as i32 {
-            global_fee_growth.saturating_sub(lower_fee_growth_outside)
+        // The fees are dynamically updated every time we cross a tick to reflect the fee_growth_outside, so they can be used to get the full picture of fees from the position.
+        if self.current_tick >= upper_tick.tick {
+            // Position is entirely below the current tick
+            upper_fee_growth_outside.saturating_sub(lower_fee_growth_outside)
+        } else if self.current_tick < lower_tick.tick {
+           // Position is entirely above the current tick
+        lower_fee_growth_outside
+        .saturating_sub(upper_fee_growth_outside)
         } else {
             global_fee_growth
                 .saturating_sub(lower_fee_growth_outside)
