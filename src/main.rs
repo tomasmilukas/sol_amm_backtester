@@ -160,7 +160,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
         .update_and_fill_liquidity_transactions(&config.pool_address)
         .await
     {
-        Ok(_) => println!("Updated ticks in liquidity transactions successfully"),
+        Ok(_) => println!("Updated liquidity transactions successfully"),
         Err(e) => eprintln!("Error updating txs: {}", e),
     }
 
@@ -189,17 +189,8 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
 
     let tx_repo = TransactionRepo::new(pool);
 
-    let latest_transaction = tx_repo
-        .fetch_highest_tx_swap(&pool_data.address)
-        .await
-        .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
-
     let (positions_data, tx_to_sync_from) = positions_service
-        .get_live_position_data_for_transaction(
-            tx_repo.clone(),
-            &config.pool_address,
-            latest_transaction.clone().unwrap(),
-        )
+        .get_live_position_data_for_transaction(tx_repo.clone(), &config.pool_address)
         .await?;
 
     // Create the liquidity range "at present" from db.
@@ -214,11 +205,11 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     println!("Current liquidity range recreated! Time to sync it backwards for the backtester.");
 
     // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
-    let (original_starting_liquidity_arr, lowest_tx_id) = sync_backwards(
+    let (original_starting_liquidity_arr, highest_tx_id) = sync_backwards(
         &tx_repo,
         liquidity_range_arr,
         pool_data.clone(),
-        tx_to_sync_from,
+        tx_to_sync_from.clone(),
         10_000,
     )
     .await?;
@@ -261,8 +252,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         }
     };
 
-    strategy.initialize_strategy(amount_token_a, amount_token_b);
-
     let mut backtest = Backtest::new(
         amount_token_a,
         amount_token_b,
@@ -274,18 +263,13 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     backtest
         .sync_forward(
             &tx_repo,
-            lowest_tx_id,
-            latest_transaction.unwrap().tx_id,
+            highest_tx_id, // the higher, the more in the past it is.
+            tx_to_sync_from.tx_id,
             &config.pool_address,
             10_000,
         )
         .await
         .unwrap();
-
-    println!(
-        "BACTESTING DONE! THIS IS YOUR TOTAL PROFIT {} AND PROFIT PCT {}",
-        backtest.wallet.total_profit, backtest.wallet.total_profit
-    );
 
     Ok(())
 }

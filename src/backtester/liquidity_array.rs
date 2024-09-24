@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, thread, time::Duration};
 
 use crate::utils::{
     error::LiquidityArrayError,
@@ -320,6 +320,8 @@ impl LiquidityArray {
         let mut amount_out = U256::zero();
 
         while remaining_amount > U256::zero() {
+            // thread::sleep(Duration::from_millis(20));
+
             let liquidity = self.active_liquidity;
 
             // is_sell == direction_down not up, thus reverse
@@ -348,11 +350,6 @@ impl LiquidityArray {
                 );
                 amount_b_in_range
             };
-
-            println!(
-                "PASSED HERE?? {} {} {}",
-                max_in, remaining_amount, current_tick
-            );
 
             // fee_remaining_amount has to be correctly adjusted to distribute at separate ticks.
             let step_amount = std::cmp::min(remaining_amount, max_in);
@@ -426,6 +423,14 @@ impl LiquidityArray {
                         current_sqrt_price,
                     );
                     amount_out += amount_b;
+
+                    // manually add/subtract since its unsigned int.
+                    if relevant_tick.net_liquidity > 0 {
+                        self.active_liquidity -= U256::from(relevant_tick.net_liquidity as u128)
+                    } else {
+                        self.active_liquidity +=
+                            U256::from(relevant_tick.net_liquidity.unsigned_abs())
+                    }
                 } else {
                     current_tick = upper_initialized_tick_data.tick;
                     current_sqrt_price = upper_sqrt_price;
@@ -445,18 +450,13 @@ impl LiquidityArray {
                     );
 
                     amount_out += amount_a;
-                }
 
-                println!(
-                    "ARE WE OVERFLOWING HERE??? {} {} ",
-                    self.active_liquidity, relevant_tick.net_liquidity,
-                );
-
-                // manually add/subtract since its unsigned int.
-                if relevant_tick.net_liquidity > 0 {
-                    self.active_liquidity += U256::from(relevant_tick.net_liquidity as u128)
-                } else {
-                    self.active_liquidity -= U256::from(relevant_tick.net_liquidity.unsigned_abs())
+                    if relevant_tick.net_liquidity > 0 {
+                        self.active_liquidity += U256::from(relevant_tick.net_liquidity as u128)
+                    } else {
+                        self.active_liquidity -=
+                            U256::from(relevant_tick.net_liquidity.unsigned_abs())
+                    }
                 }
 
                 // Update initialized tick

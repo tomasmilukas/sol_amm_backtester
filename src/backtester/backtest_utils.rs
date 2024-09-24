@@ -71,8 +71,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     // Initialize the cursor with the latest tx_id
     let mut cursor = Some(latest_transaction.tx_id);
 
-    // Initialize lowest_tx_id with the maximum possible i64 value
-    let mut lowest_tx_id = i64::MAX;
+    // Initialize highest_tx_id with the latest transaction ID. The latest txs are the first ones being inserted, so its a low nmr. Then we ascend to the past.
+    let mut highest_tx_id = latest_transaction.tx_id;
 
     loop {
         let transactions = transaction_repo
@@ -80,7 +80,7 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                 &pool_model.address,
                 cursor,
                 batch_size,
-                OrderDirection::Descending,
+                OrderDirection::Ascending,
             )
             .await
             .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
@@ -89,8 +89,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
             break;
         }
 
-        // As we are syncing backwards, everything needs to be the opposite. Increase liquidity = remove and so on. Sell swap is a buy swap with reverse amount_in and amount_out.
-        for transaction in transactions.iter().rev() {
+        // Process transactions in order (oldest to newest)
+        for transaction in transactions.iter() {
             match transaction.transaction_type.as_str() {
                 "IncreaseLiquidity" | "DecreaseLiquidity" => {
                     let liquidity_data = transaction
@@ -98,10 +98,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .to_liquidity_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                    // reverse
+                    // Reverse the operation for backwards sync
                     let is_increase = transaction.transaction_type.as_str() != "IncreaseLiquidity";
-
-                    println!("UPDATING LIQ: {}", transaction.signature);
 
                     liquidity_array.update_liquidity(
                         liquidity_data.tick_lower.unwrap(),
@@ -116,30 +114,27 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .to_swap_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                    println!("SWAPPING: {}", swap_data.amount_in);
-
                     let is_sell = swap_data.token_in == pool_model.token_a_address;
 
-                    // flip the is_sell
+                    // Flip the is_sell for backwards sync
                     liquidity_array.simulate_swap(U256::from(swap_data.amount_in), !is_sell)?;
                 }
                 _ => {}
             }
+
+            // Update highest_tx_id
+            highest_tx_id = highest_tx_id.max(transaction.tx_id);
         }
 
-        cursor = transactions.last().map(|t| t.tx_id);
+        // Update cursor for the next iteration
+        cursor = transactions.last().map(|t| t.tx_id + 1);
 
         if transactions.len() < batch_size as usize {
             break;
         }
     }
 
-    // If we didn't process any transactions, return the original cursor
-    if lowest_tx_id == i64::MAX {
-        lowest_tx_id = cursor.unwrap_or(i64::MAX);
-    }
-
-    Ok((liquidity_array, lowest_tx_id))
+    Ok((liquidity_array, highest_tx_id))
 }
 
 #[cfg(test)]
@@ -159,13 +154,6 @@ mod tests {
 
     #[async_trait]
     impl TransactionRepoTrait for MockTransactionRepo {
-        async fn fetch_highest_tx_swap(
-            &self,
-            _pool_address: &str,
-        ) -> Result<Option<TransactionModelFromDB>> {
-            Ok(self.transactions.last().cloned())
-        }
-
         async fn fetch_transactions(
             &self,
             _pool_address: &str,

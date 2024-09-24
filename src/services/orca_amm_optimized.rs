@@ -175,7 +175,9 @@ impl OrcaOptimizedAMM {
                         transaction_type: "ClosePosition".to_string(),
                         ready_for_backtesting: false, // used for fetching openPositions
                         data: TransactionData::ClosePosition(ClosePositionData {
-                            position_address: instruction["payload"].as_object().unwrap()["keyPosition"].to_string(),
+                            position_address: instruction["payload"].as_object().unwrap()
+                                ["keyPosition"]
+                                .to_string(),
                         }),
                     }),
                     _ => None,
@@ -497,8 +499,10 @@ impl AMMService for OrcaOptimizedAMM {
 
             println!("Processing transactions for {}", current_date);
 
-            let transaction_models =
+            let mut transaction_models =
                 self.convert_data_to_transactions_model(pool_address, transactions)?;
+
+            transaction_models.sort_by(|a, b| b.block_time.cmp(&a.block_time));
 
             self.insert_transactions(transaction_models).await?;
 
