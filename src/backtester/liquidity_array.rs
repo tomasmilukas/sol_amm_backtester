@@ -340,33 +340,23 @@ impl LiquidityArray {
         let mut current_tick = self.current_tick;
         let mut current_sqrt_price = self.current_sqrt_price;
 
-        // Calculate amount after fees at the top
-        let fee_amount = (amount_in * self.fee_rate) / 1_000_000;
-        let mut remaining_fee = fee_amount;
-
-        let mut remaining_amount = amount_in - fee_amount;
+        let mut remaining_amount = amount_in;
         let mut amount_out = U256::zero();
 
         while remaining_amount > U256::zero() {
-            thread::sleep(Duration::from_millis(5000));
+            thread::sleep(Duration::from_millis(10));
 
             let liquidity = self.active_liquidity;
 
-            // Its fine to unwrap since they must always exist.
             let upper_initialized_tick_data = self.cached_upper_initialized_tick.unwrap();
             let lower_initialized_tick_data = self.cached_lower_initialized_tick.unwrap();
 
             println!("CURRENT TICK: {}", current_tick);
-            println!(
-                "TICK DATA: {} {:?} {:?}",
-                is_sell, self.cached_upper_initialized_tick, self.cached_lower_initialized_tick
-            );
 
             let lower_sqrt_price = tick_to_sqrt_price_u256(lower_initialized_tick_data.tick);
             let upper_sqrt_price = tick_to_sqrt_price_u256(upper_initialized_tick_data.tick);
 
             let max_in = if is_sell {
-                // Token_a are tokens on the upper side of current price. The logic here is that we calculate amount of liquidity by going from lower to current, which is the same as from curr to lower.
                 let (amount_a_in_range, _) = calculate_amounts(
                     liquidity,
                     lower_sqrt_price,
@@ -384,31 +374,20 @@ impl LiquidityArray {
                 amount_b_in_range
             };
 
-            // fee_remaining_amount has to be correctly adjusted to distribute at separate ticks.
-            let step_amount = std::cmp::min(remaining_amount, max_in);
-            let step_fee = (remaining_fee * step_amount) / remaining_amount;
-            let fee_growth = (step_fee * Q128) / liquidity;
-
-            // println!("OVERFLOW 1111");
-            // println!(
-            //     "LIQ: {} {} {}",
-            //     liquidity,
-            //     self.cached_lower_initialized_tick.unwrap().net_liquidity,
-            //     self.cached_upper_initialized_tick.unwrap().net_liquidity
-            // );
-            // println!("AMOUNTS: {} {}", remaining_amount, max_in);
-
-            // Stay within the initialized range.
             if remaining_amount <= max_in {
+                // Swap can be completed within the current tick
+                let step_amount = remaining_amount;
+                let step_fee = (step_amount * self.fee_rate) / 1_000_000;
+                let step_amount_net = step_amount - step_fee;
+
                 let old_sqrt_price = current_sqrt_price;
                 let new_sqrt_price = calculate_new_sqrt_price(
                     current_sqrt_price,
                     liquidity,
-                    remaining_amount,
+                    step_amount_net,
                     is_sell,
                 );
 
-                // Use old and new amounts to get amount_out correct.
                 let (old_amount_a, old_amount_b) = calculate_amounts(
                     liquidity,
                     old_sqrt_price,
@@ -424,40 +403,31 @@ impl LiquidityArray {
 
                 if is_sell {
                     amount_out += new_amount_b.abs_diff(old_amount_b);
+                    self.fee_growth_global_a += (step_fee * Q128) / liquidity;
                 } else {
                     amount_out += new_amount_a.abs_diff(old_amount_a);
-                }
-
-                if is_sell {
-                    self.fee_growth_global_a += fee_growth;
-                } else {
-                    self.fee_growth_global_b += fee_growth;
+                    self.fee_growth_global_b += (step_fee * Q128) / liquidity;
                 }
 
                 current_sqrt_price = new_sqrt_price;
-                break;
+                remaining_amount = U256::zero();
             } else {
-                // Cross the tick range and calculate new active liquidity and new fee_growth_outside for upper or lower tick.
-                remaining_amount -= max_in;
-
-                // Also deduct remaining_fee to correctly adjust the fee calculations.
-                remaining_fee -= step_fee;
+                // Swap will cross into the next tick
+                let step_amount = max_in;
+                let step_fee = (step_amount * self.fee_rate) / 1_000_000;
 
                 let mut relevant_tick: TickData;
+                let fee_growth = (step_fee * Q128) / liquidity;
 
                 if is_sell {
                     current_tick = lower_initialized_tick_data.tick;
                     current_sqrt_price = lower_sqrt_price;
                     relevant_tick = lower_initialized_tick_data;
 
-                    // Update fee growth global
                     self.fee_growth_global_a += fee_growth;
-
-                    // fee growth
                     relevant_tick.fee_growth_outside_a =
                         self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
 
-                    // amount_out, since we swapping a we get b amount out.
                     let (_, amount_b) = calculate_amounts(
                         liquidity,
                         current_sqrt_price,
@@ -466,12 +436,11 @@ impl LiquidityArray {
                     );
                     amount_out += amount_b;
 
-                    // manually add/subtract since its unsigned int.
                     if relevant_tick.net_liquidity > 0 {
-                        self.active_liquidity -= U256::from(relevant_tick.net_liquidity as u128)
+                        self.active_liquidity -= U256::from(relevant_tick.net_liquidity as u128);
                     } else {
                         self.active_liquidity +=
-                            U256::from(relevant_tick.net_liquidity.unsigned_abs())
+                            U256::from(relevant_tick.net_liquidity.unsigned_abs());
                     }
 
                     self.cached_upper_initialized_tick = Some(lower_initialized_tick_data);
@@ -482,26 +451,23 @@ impl LiquidityArray {
                     current_sqrt_price = upper_sqrt_price;
                     relevant_tick = upper_initialized_tick_data;
 
-                    // Update fee growth global
                     self.fee_growth_global_b += fee_growth;
                     relevant_tick.fee_growth_outside_b =
                         self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
-                    // amount_out, since we swapping b we get a amount out.
                     let (amount_a, _) = calculate_amounts(
                         liquidity,
                         current_sqrt_price,
                         current_sqrt_price,
                         upper_sqrt_price,
                     );
-
                     amount_out += amount_a;
 
                     if relevant_tick.net_liquidity > 0 {
-                        self.active_liquidity += U256::from(relevant_tick.net_liquidity as u128)
+                        self.active_liquidity += U256::from(relevant_tick.net_liquidity as u128);
                     } else {
                         self.active_liquidity -=
-                            U256::from(relevant_tick.net_liquidity.unsigned_abs())
+                            U256::from(relevant_tick.net_liquidity.unsigned_abs());
                     }
 
                     self.cached_upper_initialized_tick =
@@ -509,9 +475,10 @@ impl LiquidityArray {
                     self.cached_lower_initialized_tick = Some(upper_initialized_tick_data);
                 }
 
-                // Update initialized tick
                 let index = self.get_index(relevant_tick.tick);
                 self.data[index] = relevant_tick;
+
+                remaining_amount -= step_amount;
             }
         }
 
