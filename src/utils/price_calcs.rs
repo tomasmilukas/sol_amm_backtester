@@ -96,22 +96,23 @@ pub fn calculate_amounts(
 pub fn calculate_new_sqrt_price(
     current_sqrt_price: U256,
     liquidity: U256,
-    amount_in: U256,
+    amount_in: U256, // Δx
     is_sell: bool,
 ) -> U256 {
     if is_sell {
-        // Selling token0 for token1
-        let product = amount_in.checked_mul(current_sqrt_price).unwrap();
-        let denominator = liquidity.checked_mul(Q64).unwrap().checked_add(product).unwrap();
-        liquidity.checked_mul(current_sqrt_price).unwrap().checked_mul(Q64).unwrap()
-            .checked_div(denominator).unwrap()
-    } else {
-        // Selling token1 for token0 (this case remains unchanged)
+        // sqrtP_new = (L * sqrtP_current) / (L + Δx * sqrtP_current)
         let numerator = liquidity.checked_mul(current_sqrt_price).unwrap();
-        let amount_in_scaled = amount_in.checked_mul(Q64).unwrap();
-        numerator.checked_add(amount_in_scaled).unwrap().checked_div(liquidity).unwrap()
+        let denominator = liquidity.checked_add(
+            amount_in.checked_mul(current_sqrt_price).unwrap().checked_div(Q64).unwrap()
+        ).unwrap();
+        numerator.checked_div(denominator).unwrap()
+    } else {
+        // sqrtP_new = sqrtP_current + (Δy * Q64) / L
+        let delta = amount_in.checked_mul(Q64).unwrap().checked_div(liquidity).unwrap();
+        current_sqrt_price.checked_add(delta).unwrap()
     }
 }
+
 
 pub fn calculate_rebalance_amount(
     amount_a: U256,

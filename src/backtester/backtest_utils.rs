@@ -124,8 +124,6 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
 
                     let is_sell = swap_data.token_in == pool_model.token_a_address;
 
-                    println!("TIME: {}", transaction.block_time_utc);
-
                     // Flip the is_sell for backwards sync
                     liquidity_array.simulate_swap(U256::from(swap_data.amount_in), !is_sell)?;
                 }

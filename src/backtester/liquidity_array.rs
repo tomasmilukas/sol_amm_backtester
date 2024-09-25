@@ -155,11 +155,13 @@ impl LiquidityArray {
     }
 
     // ALSO initializes/uninitializes ticks.
+    // ONLY USED FOR LIQ TRANSACTIONS AND LIVE POSITIONS SET UP.
+    // LIQUIDITY IS ALWAYS ABOVE 0.
     pub fn update_liquidity(
         &mut self,
         lower_tick: i32,
         upper_tick: i32,
-        net_liquidity: i128,
+        liquidity: i128,
         is_increase: bool,
     ) {
         let lower_tick_index = self.get_index(lower_tick);
@@ -173,16 +175,16 @@ impl LiquidityArray {
         if is_increase {
             // if price moves down we minus both values (so the upper gets added and lower subtracts)
             // if price moves up we add both values (so the upper gets removed and lower added)
-            self.data[lower_tick_index].net_liquidity += net_liquidity;
-            self.data[upper_tick_index].net_liquidity -= net_liquidity;
+            self.data[lower_tick_index].net_liquidity += liquidity;
+            self.data[upper_tick_index].net_liquidity -= liquidity;
 
             // always true for increasing liq.
             self.data[lower_tick_index].is_initialized = true;
             self.data[upper_tick_index].is_initialized = true;
         } else {
             // opposite for removing liquidity
-            self.data[lower_tick_index].net_liquidity -= net_liquidity;
-            self.data[upper_tick_index].net_liquidity += net_liquidity;
+            self.data[lower_tick_index].net_liquidity -= liquidity;
+            self.data[upper_tick_index].net_liquidity += liquidity;
 
             // keep tick initialized if not 0 (aka uninitialized when 0)
             self.data[lower_tick_index].is_initialized =
@@ -201,10 +203,10 @@ impl LiquidityArray {
 
         if in_range && is_increase {
             // If in range, add it to active liquidity
-            self.active_liquidity += U256::from(net_liquidity)
+            self.active_liquidity += U256::from(liquidity)
         } else if in_range && !is_increase {
-            // in range but decrease liquidity (mainl from txs)
-            self.active_liquidity -= U256::from(net_liquidity)
+            // in range but decrease liquidity (mainly from txs)
+            self.active_liquidity -= U256::from(liquidity)
         }
 
         // println!("CURR TICK: {}", self.current_tick);
@@ -346,7 +348,7 @@ impl LiquidityArray {
         let mut amount_out = U256::zero();
 
         while remaining_amount > U256::zero() {
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(5000));
 
             let liquidity = self.active_liquidity;
 
@@ -354,15 +356,11 @@ impl LiquidityArray {
             let upper_initialized_tick_data = self.cached_upper_initialized_tick.unwrap();
             let lower_initialized_tick_data = self.cached_lower_initialized_tick.unwrap();
 
-            // // is_sell == direction_down not up, thus reverse
-            // let (upper_initialized_tick_data, lower_initialized_tick_data) =
-            //     self.get_upper_and_lower_ticks(current_tick, !is_sell)?;
-
             println!("CURRENT TICK: {}", current_tick);
-            // println!(
-            //     "TICK DATA: {} {:?} {:?}",
-            //     is_sell, self.cached_upper_initialized_tick, self.cached_lower_initialized_tick
-            // );
+            println!(
+                "TICK DATA: {} {:?} {:?}",
+                is_sell, self.cached_upper_initialized_tick, self.cached_lower_initialized_tick
+            );
 
             let lower_sqrt_price = tick_to_sqrt_price_u256(lower_initialized_tick_data.tick);
             let upper_sqrt_price = tick_to_sqrt_price_u256(upper_initialized_tick_data.tick);
@@ -445,8 +443,6 @@ impl LiquidityArray {
                 // Also deduct remaining_fee to correctly adjust the fee calculations.
                 remaining_fee -= step_fee;
 
-                // println!("OVERFLOW 2222");
-
                 let mut relevant_tick: TickData;
 
                 if is_sell {
@@ -460,8 +456,6 @@ impl LiquidityArray {
                     // fee growth
                     relevant_tick.fee_growth_outside_a =
                         self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
-
-                    // println!("OVERFLOW 3333");
 
                     // amount_out, since we swapping a we get b amount out.
                     let (_, amount_b) = calculate_amounts(
@@ -493,8 +487,6 @@ impl LiquidityArray {
                     relevant_tick.fee_growth_outside_b =
                         self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
-                    // println!("OVERFLOW 4444");
-
                     // amount_out, since we swapping b we get a amount out.
                     let (amount_a, _) = calculate_amounts(
                         liquidity,
@@ -504,11 +496,6 @@ impl LiquidityArray {
                     );
 
                     amount_out += amount_a;
-
-                    // println!(
-                    //     "OVERFLOW 5555 {} {}",
-                    //     relevant_tick.net_liquidity, self.active_liquidity
-                    // );
 
                     if relevant_tick.net_liquidity > 0 {
                         self.active_liquidity += U256::from(relevant_tick.net_liquidity as u128)
@@ -520,17 +507,10 @@ impl LiquidityArray {
                     self.cached_upper_initialized_tick =
                         Some(self.get_next_initialized_tick(current_tick, true)?);
                     self.cached_lower_initialized_tick = Some(upper_initialized_tick_data);
-
-                    // println!("OVERFLOW 6666");
                 }
 
                 // Update initialized tick
                 let index = self.get_index(relevant_tick.tick);
-
-                // println!(
-                //     "RELEVANT TICK DEBUGGING 2: {} {:?} {:?}",
-                //     index, relevant_tick, self.data[index]
-                // );
                 self.data[index] = relevant_tick;
             }
         }
