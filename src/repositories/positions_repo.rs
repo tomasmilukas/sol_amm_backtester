@@ -114,7 +114,7 @@ impl PositionsRepo {
         version: i32,
     ) -> Result<Vec<LivePositionModel>, sqlx::Error> {
         let rows: Vec<LivePositionRow> =
-            sqlx::query_as("SELECT * FROM live_positions WHERE pool_address = $1 AND version = $2")
+            sqlx::query_as("SELECT * FROM live_positions WHERE pool_address = $1 AND version = $2 AND liquidity != '0'")
                 .bind(pool_address)
                 .bind(version)
                 .fetch_all(&self.db)

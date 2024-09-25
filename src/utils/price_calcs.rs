@@ -99,48 +99,17 @@ pub fn calculate_new_sqrt_price(
     amount_in: U256,
     is_sell: bool,
 ) -> U256 {
-    // Formula explanations for later in case need to edit:
-    // x = L / sqrt(P) also y = L * sqrt(P)
     if is_sell {
-        /*
-        for this case:
-        (x + Δx) * y = L^2
-
-        (L/sqrt(P) + Δx) * (L*sqrt(P)) = L^2
-        L^2 + Δx*L*srt(P)q = L^2
-        Δx*L*sqrt(P) = L^2 - L^2 = 0
-
-        After price change we must satisfy: (L/sqrt(P_new)) * (L*sqrt(P_new)) = L^2.
-        Hence, L/sqrt(P_new) = L/sqrt(P) + Δx. sqrt(P_new) = L / (L/sqrt(P) + Δx).
-
-        sqrt(P_new) = (L * sqrt(P)) / (L + Δx * sqrt(P))
-        */
-        let numerator = current_sqrt_price.checked_mul(liquidity).unwrap();
+        // Selling token0 for token1
         let product = amount_in.checked_mul(current_sqrt_price).unwrap();
-        let denominator = liquidity
-            .checked_add(product.checked_div(Q64).unwrap())
-            .unwrap();
-        numerator.checked_div(denominator).unwrap()
+        let denominator = liquidity.checked_mul(Q64).unwrap().checked_add(product).unwrap();
+        liquidity.checked_mul(current_sqrt_price).unwrap().checked_mul(Q64).unwrap()
+            .checked_div(denominator).unwrap()
     } else {
-        /*
-        for this case:
-        x * (y + Δy) = L^2
-
-        (L/sqrt(P)) * (L*sqrt(P) + Δy) = L^2
-        L^2 + L*Δy = L^2
-        L*Δy = L^2 - L^2 = 0
-
-        After price change we must satisfy: (L/sqrt(P_new)) * (L*sqrt(P_new)) = L^2.
-        Hence, L*sqrt(P_new) = L*sqrt(P) + Δy. sqrt(P_new) = sqrt(P) + (Δy / L).
-
-        sqrt(P_new) = sqrt(P) + (Δy / L)
-        */
-        let increment = amount_in
-            .checked_mul(Q64)
-            .unwrap()
-            .checked_div(liquidity)
-            .unwrap();
-        current_sqrt_price.checked_add(increment).unwrap()
+        // Selling token1 for token0 (this case remains unchanged)
+        let numerator = liquidity.checked_mul(current_sqrt_price).unwrap();
+        let amount_in_scaled = amount_in.checked_mul(Q64).unwrap();
+        numerator.checked_add(amount_in_scaled).unwrap().checked_div(liquidity).unwrap()
     }
 }
 

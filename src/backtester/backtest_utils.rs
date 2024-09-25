@@ -36,6 +36,7 @@ pub fn create_full_liquidity_range(
 
     let is_sell = swap_data.token_in == pool_model.token_a_address;
 
+    // Set essential info before simulation.
     if is_sell {
         let tick = price_to_tick(swap_data.amount_out as f64 / swap_data.amount_in as f64);
 
@@ -57,6 +58,13 @@ pub fn create_full_liquidity_range(
             true,
         );
     }
+
+    // AFTER the whole liquidity distribution range is set up, we can set the essential caches.
+    let (upper_tick_data, lower_tick_data) =
+        liquidity_array.get_upper_and_lower_ticks(liquidity_array.current_tick, is_sell)?;
+
+    liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data);
+    liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data);
 
     Ok(liquidity_array)
 }
@@ -115,6 +123,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
                     let is_sell = swap_data.token_in == pool_model.token_a_address;
+
+                    println!("TIME: {}", transaction.block_time_utc);
 
                     // Flip the is_sell for backwards sync
                     liquidity_array.simulate_swap(U256::from(swap_data.amount_in), !is_sell)?;
