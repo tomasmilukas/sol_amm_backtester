@@ -102,17 +102,26 @@ pub fn calculate_new_sqrt_price(
     if is_sell {
         // sqrtP_new = (L * sqrtP_current) / (L + Δx * sqrtP_current)
         let numerator = liquidity.checked_mul(current_sqrt_price).unwrap();
-        let denominator = liquidity.checked_add(
-            amount_in.checked_mul(current_sqrt_price).unwrap().checked_div(Q64).unwrap()
-        ).unwrap();
+        let denominator = liquidity
+            .checked_add(
+                amount_in
+                    .checked_mul(current_sqrt_price)
+                    .unwrap()
+                    .checked_div(Q64)
+                    .unwrap(),
+            )
+            .unwrap();
         numerator.checked_div(denominator).unwrap()
     } else {
         // sqrtP_new = sqrtP_current + (Δy * Q64) / L
-        let delta = amount_in.checked_mul(Q64).unwrap().checked_div(liquidity).unwrap();
+        let delta = amount_in
+            .checked_mul(Q64)
+            .unwrap()
+            .checked_div(liquidity)
+            .unwrap();
         current_sqrt_price.checked_add(delta).unwrap()
     }
 }
-
 
 pub fn calculate_rebalance_amount(
     amount_a: U256,
@@ -579,5 +588,116 @@ mod tests {
             starting_amount_b,
             amount_b
         );
+    }
+
+    #[test]
+    fn test_for_fun() {
+        // let (amount_a, _) = calculate_amounts(
+        //     U256::from(9913435703877_u128),
+        //     tick_to_sqrt_price_u256(-21000),
+        //     tick_to_sqrt_price_u256(-20164),
+        //     tick_to_sqrt_price_u256(-16096),
+        // );
+
+        // assert_eq!(
+        //     U256::from(4999),
+        //     U256::from(amount_a / 10_i32.pow(9)),
+        //     "amount_a match when below lower range"
+        // );
+
+        // let (_, amount_b) = calculate_amounts(
+        //     U256::from(9913435703877_u128),
+        //     tick_to_sqrt_price_u256(-15000),
+        //     tick_to_sqrt_price_u256(-20164),
+        //     tick_to_sqrt_price_u256(-16096),
+        // );
+
+        // assert_eq!(
+        //     U256::from(815893),
+        //     U256::from(amount_b / 10_i32.pow(6)),
+        //     "amount_a match when below lower range"
+        // );
+
+        //2nd example.
+
+        let starting_tick = -18811;
+        let lower_tick = -19008;
+        let upper_tick = -18656;
+
+        let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
+
+        let (amount_a, amount_b) = calculate_amounts(
+            U256::from(518248733379757_u128),
+            starting_sqrt_price_u256,
+            tick_to_sqrt_price_u256(lower_tick),
+            tick_to_sqrt_price_u256(upper_tick),
+        );
+
+        println!("AMOUNTS 0000: {} {}", amount_a, amount_b);
+        // assert_eq!(amount_a, amount_b);
+
+        let starting_tick = -18905;
+        let lower_tick = -19008;
+        let upper_tick = -18832;
+
+        let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
+
+        // let (amount_a, amount_b) = calculate_amounts(
+        //     U256::from(98044760936974_u128),
+        //     starting_sqrt_price_u256,
+        //     tick_to_sqrt_price_u256(lower_tick),
+        //     tick_to_sqrt_price_u256(upper_tick),
+        // );
+
+        // println!("AMOUNTS: {} {}", amount_a, amount_b);
+        // assert_eq!(amount_a, amount_b);
+
+        let (amount_a, amount_b) = calculate_amounts(
+            U256::from(98044760936974_u128),
+            tick_to_sqrt_price_u256(-19184),
+            tick_to_sqrt_price_u256(-19184),
+            tick_to_sqrt_price_u256(-19008),
+        );
+
+        println!("AMOUNTS 2: {} {}", amount_a, amount_b);
+        // assert_eq!(amount_a, amount_b);
+
+        let (amount_a, amount_b) = calculate_amounts(
+            U256::from(98044760936974_u128),
+            tick_to_sqrt_price_u256(-19008),
+            tick_to_sqrt_price_u256(-19184),
+            tick_to_sqrt_price_u256(-19008),
+        );
+
+        println!("AMOUNTS 3: {} {}", amount_a, amount_b);
+        assert_eq!(amount_a, amount_b);
+
+        // let starting_tick = -16000;
+        // let lower_tick = -20000;
+        // let upper_tick = -17000;
+
+        // let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
+
+        // let liquidity = calculate_liquidity(
+        //     U256::from(500 * 10_u128.pow(9)),
+        //     U256::from(67884 * 10_u128.pow(6)),
+        //     starting_sqrt_price_u256,
+        //     tick_to_sqrt_price_u256(lower_tick),
+        //     tick_to_sqrt_price_u256(upper_tick),
+        // );
+
+        // let starting_tick = -21000;
+        // let lower_tick = -20000;
+        // let upper_tick = -17000;
+
+        // let starting_sqrt_price_u256 = tick_to_sqrt_price_u256(starting_tick);
+
+        // let liquidity = calculate_liquidity(
+        //     U256::from(500 * 10_u128.pow(9)),
+        //     U256::from(67884 * 10_u128.pow(6)),
+        //     starting_sqrt_price_u256,
+        //     tick_to_sqrt_price_u256(lower_tick),
+        //     tick_to_sqrt_price_u256(upper_tick),
+        // );
     }
 }

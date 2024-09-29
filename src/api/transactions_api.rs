@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use reqwest::StatusCode;
+use anyhow::{anyhow, Context, Result};
+use reqwest::{Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
@@ -11,7 +11,7 @@ pub struct SignatureApiResponse {
     pub id: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TransactionApiResponse {
     pub jsonrpc: String,
     pub result: Value,
@@ -98,7 +98,14 @@ impl TransactionApi {
             return Err(ApiError::RateLimit);
         }
 
-        let api_response: SignatureApiResponse = response.json().await?;
+        let api_response: SignatureApiResponse = match response.json().await {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                println!("Failed to parse JSON: {:?}", e);
+                return Err(ApiError::Other(anyhow!(e)));
+            }
+        };
+
         Ok(api_response.result)
     }
 

@@ -149,10 +149,25 @@ impl Backtest {
                         let is_increase =
                             transaction.transaction_type.as_str() == "IncreaseLiquidity";
 
+                        let (tick_lower, tick_upper, liquidity_amount) = match (
+                            liquidity_data.tick_lower,
+                            liquidity_data.tick_upper,
+                            liquidity_data.liquidity_amount.parse::<i128>(),
+                        ) {
+                            (Some(lower), Some(upper), Ok(amount)) => (lower, upper, amount),
+                            _ => {
+                                eprintln!(
+                                    "Liquidity transaction missing tick data, skipping: {}",
+                                    transaction.signature
+                                );
+                                continue;
+                            }
+                        };
+
                         self.liquidity_arr.update_liquidity(
-                            liquidity_data.tick_lower.unwrap(),
-                            liquidity_data.tick_upper.unwrap(),
-                            liquidity_data.liquidity_amount.parse::<i128>().unwrap(),
+                            tick_lower,
+                            tick_upper,
+                            liquidity_amount,
                             is_increase,
                         );
                     }
@@ -161,6 +176,16 @@ impl Backtest {
                             .data
                             .to_swap_data()
                             .map_err(|e| SyncError::ParseError(e.to_string()))?;
+
+                        println!(
+                            "IS_SELL: {} {}",
+                            swap_data.token_in == self.wallet.token_a_addr,
+                            swap_data.token_in
+                        );
+
+                        println!("AMOUNT IN: {}", swap_data.amount_in);
+
+                        println!("EXPECTED AMOUNT OUT: {}", swap_data.amount_out);
 
                         self.liquidity_arr.simulate_swap(
                             U256::from(swap_data.amount_in),

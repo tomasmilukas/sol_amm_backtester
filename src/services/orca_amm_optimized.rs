@@ -145,6 +145,13 @@ impl OrcaOptimizedAMM {
         let instructions = tx["instructions"].as_array()?;
 
         for instruction in instructions {
+            let is_right_whirlpool = instruction["payload"]["keyWhirlpool"].as_str() == Some(pool_address);
+
+            // skip transactions/swaps that dont involve our pool
+            if !is_right_whirlpool {
+                continue;
+            }
+
             if let Some(name) = instruction["name"].as_str() {
                 return match name {
                     "swap" | "swapV2" => {
