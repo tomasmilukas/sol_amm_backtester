@@ -7,7 +7,7 @@ use crate::{
         error::{BacktestError, SyncError},
         price_calcs::{
             calculate_amounts, calculate_liquidity, calculate_rebalance_amount,
-            tick_to_sqrt_price_u256, Q64, U256,
+            tick_to_sqrt_price_u256, Q128, Q64, U256,
         },
     },
 };
@@ -156,10 +156,10 @@ impl Backtest {
                         ) {
                             (Some(lower), Some(upper), Ok(amount)) => (lower, upper, amount),
                             _ => {
-                                eprintln!(
-                                    "Liquidity transaction missing tick data, skipping: {}",
-                                    transaction.signature
-                                );
+                                // eprintln!(
+                                //     "Liquidity transaction missing tick data, skipping: {}",
+                                //     transaction.signature
+                                // );
                                 continue;
                             }
                         };
@@ -177,15 +177,15 @@ impl Backtest {
                             .to_swap_data()
                             .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                        println!(
-                            "IS_SELL: {} {}",
-                            swap_data.token_in == self.wallet.token_a_addr,
-                            swap_data.token_in
-                        );
+                        // println!(
+                        //     "IS_SELL: {} {}",
+                        //     swap_data.token_in == self.wallet.token_a_addr,
+                        //     swap_data.token_in
+                        // );
 
-                        println!("AMOUNT IN: {}", swap_data.amount_in);
+                        // println!("AMOUNT IN: {}", swap_data.amount_in);
 
-                        println!("EXPECTED AMOUNT OUT: {}", swap_data.amount_out);
+                        // println!("EXPECTED AMOUNT OUT: {}", swap_data.amount_out);
 
                         self.liquidity_arr.simulate_swap(
                             U256::from(swap_data.amount_in),
@@ -321,6 +321,10 @@ impl Backtest {
                     amount_a,
                     amount_b,
                 } => {
+                    println!("Creating position before forward syncing.");
+
+                    println!("STARTING amount a and b: {} {}", amount_a, amount_b);
+
                     if amount_a > self.wallet.amount_token_a {
                         return Err(BacktestError::InsufficientBalance {
                             requested: amount_a,
@@ -337,12 +341,66 @@ impl Backtest {
                         });
                     }
 
-                    let liquidity = calculate_liquidity(
+                    let upper_sqrt_price = tick_to_sqrt_price_u256(upper_tick);
+                    let lower_sqrt_price = tick_to_sqrt_price_u256(lower_tick);
+                    let curr_sqrt_price = self.liquidity_arr.current_sqrt_price;
+
+                    // Since the tick might be anywhere in between lower and upper provided ticks from env, we need to rebalance.
+                    // 1.0 - rebalance ratio since rebalance ratio is used to get the new ratio of amount_a.
+                    let rebalance_ratio = (((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
+                        / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64));
+
+                    println!(
+                        "PRICES: {} {} {}",
+                        upper_sqrt_price, lower_sqrt_price, curr_sqrt_price
+                    );
+
+                    let (amount_to_sell, is_sell) = calculate_rebalance_amount(
                         amount_a,
                         amount_b,
-                        self.liquidity_arr.current_sqrt_price,
-                        tick_to_sqrt_price_u256(lower_tick),
-                        tick_to_sqrt_price_u256(upper_tick),
+                        curr_sqrt_price,
+                        U256::from((rebalance_ratio * Q64.as_u128() as f64) as u128),
+                    );
+
+                    println!("REBALANCE RATIO: {}", rebalance_ratio);
+
+                    println!("INFO: {} {}", amount_to_sell, is_sell);
+
+                    let amount_out = self.liquidity_arr.simulate_swap(amount_to_sell, is_sell)?;
+
+                    println!("INFO 2: {}", amount_out);
+
+                    // have the correct final amounts
+                    let (amount_a, amount_b) = if is_sell {
+                        (amount_a - amount_to_sell, amount_b + amount_out)
+                    } else {
+                        (amount_a + amount_out, amount_b - amount_to_sell)
+                    };
+
+                    println!("FINAL AMOUNTS FOR LIQ: {} {}", amount_a, amount_b);
+
+                    // calculate the potential liquidity that would be created in the pool
+                    let liquidity = calculate_liquidity(
+                        U256::zero(),
+                        amount_b,
+                        curr_sqrt_price,
+                        lower_sqrt_price,
+                        upper_sqrt_price,
+                    );
+
+                    println!("LIQ: {}", liquidity);
+
+                    // reverse the liquidity calculation to see how much the pools would truly accept
+                    let (amount_a, amount_b) = calculate_amounts(
+                        liquidity,
+                        curr_sqrt_price,
+                        lower_sqrt_price,
+                        upper_sqrt_price,
+                    );
+
+                    println!(
+                        "Provided liquidity with amount a: {} and amount b: {}",
+                        amount_a, amount_b
                     );
 
                     self.liquidity_arr.add_owners_position(
@@ -357,6 +415,7 @@ impl Backtest {
                         position_id,
                     );
 
+                    // adjust wallet amounts
                     self.wallet.amount_token_a -= amount_a;
                     self.wallet.amount_token_b -= amount_b;
                 }
@@ -366,6 +425,8 @@ impl Backtest {
                 } => {
                     let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
                     let position = self.liquidity_arr.remove_owners_position(&position_id)?;
+
+                    println!("FEES EARNED: {} {}", fees_a, fees_b);
 
                     self.wallet.amount_a_fees_collected += fees_a;
                     self.wallet.amount_b_fees_collected += fees_b;
@@ -377,22 +438,31 @@ impl Backtest {
                         tick_to_sqrt_price_u256(position.upper_tick),
                     );
 
+                    println!("AMOUNTS FROM POSITION: {} {}", amount_a, amount_b);
+
                     self.wallet.amount_token_a += amount_a;
                     self.wallet.amount_token_b += amount_b;
 
-                    // Calculate initial value in terms of token A
-                    let initial_price = (starting_sqrt_price * starting_sqrt_price) / Q64;
-                    let initial_value_a = self.start_info.token_a_amount
-                        + (self.start_info.token_b_amount * Q64) / initial_price;
+                    println!(
+                        "AMOUNTS FINAL FINAL: {} {}",
+                        self.wallet.amount_token_a, self.wallet.amount_token_b
+                    );
 
+                    // Calculate initial value in terms of token A
+                    let initial_price = (starting_sqrt_price * starting_sqrt_price) / Q128;
                     // Calculate the final value in terms of token A
                     let current_price = (self.liquidity_arr.current_sqrt_price
                         * self.liquidity_arr.current_sqrt_price)
-                        / Q64;
+                        / Q128;
+
+                    println!("PRICES: {} {}", initial_price, current_price);
+
+                    let initial_value_a = self.start_info.token_a_amount
+                        + (self.start_info.token_b_amount) / initial_price;
+
                     let final_value_a = (self.wallet.amount_token_a
                         + self.wallet.amount_a_fees_collected)
-                        + ((self.wallet.amount_token_b + self.wallet.amount_b_fees_collected)
-                            * Q64)
+                        + (self.wallet.amount_token_b + self.wallet.amount_b_fees_collected)
                             / current_price;
 
                     // Calculate profit
@@ -420,10 +490,19 @@ impl Backtest {
                     self.wallet.total_profit_pct = profit_percentage;
 
                     println!("Strategy finalized:");
-                    println!("Initial value (in token A): {}", initial_value_a);
-                    println!("Final value (in token A): {}", final_value_a);
+                    println!("Initial value (in token A): {:.3}", initial_value_a);
+                    println!("Final value (in token A): {:.3}", final_value_a);
                     println!("Total profit: {} token A", self.wallet.total_profit);
-                    println!("Total profit percentage: {}%", self.wallet.total_profit_pct);
+                    println!(
+                        "Total profit pct (in token a): {:.2}%",
+                        self.wallet.total_profit_pct
+                    );
+                    println!(
+                        "Price pct change over the period: {:.2}%",
+                        (((current_price).as_u128() as f64 - (initial_price).as_u128() as f64)
+                            / initial_price.as_u128() as f64)
+                            * 100.0
+                    );
                 }
             }
         }

@@ -106,12 +106,12 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     pool_model: PoolModel,
     latest_transaction: TransactionModelFromDB,
     batch_size: i64,
-) -> Result<(LiquidityArray, i64), SyncError> {
+) -> Result<(LiquidityArray, TransactionModelFromDB), SyncError> {
     // Initialize the cursor with the latest tx_id
     let mut cursor = Some(latest_transaction.tx_id);
 
     // Initialize highest_tx_id with the latest transaction ID. The latest txs are the first ones being inserted, so its a low nmr. Then we ascend to the past.
-    let mut highest_tx_id = latest_transaction.tx_id;
+    let mut highest_tx = latest_transaction;
 
     loop {
         let transactions = transaction_repo
@@ -147,10 +147,10 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                     ) {
                         (Some(lower), Some(upper), Ok(amount)) => (lower, upper, amount),
                         _ => {
-                            eprintln!(
-                                "Liquidity transaction missing tick data, skipping: {}",
-                                transaction.signature
-                            );
+                            // eprintln!(
+                            //     "Liquidity transaction missing tick data, skipping: {}",
+                            //     transaction.signature
+                            // );
                             continue;
                         }
                     };
@@ -175,7 +175,7 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                     // println!("AMOUNT IN: {}", swap_data.amount_in);
 
                     // println!("EXPECTED AMOUNT OUT: {}", swap_data.amount_out);
-                    println!("SIG: {}", transaction.signature);
+                    // println!("SIG: {}", transaction.signature);
 
                     // Flip the is_sell for backwards sync and always pass in amount_out since we reversing each tx.
                     // For instance we have SOL -> POPCAT (aka sell) with amount_in being SOL. So now we are pasing POPCAT -> SOL and flip sell to buy. Both need reversion!
@@ -185,7 +185,9 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
             }
 
             // Update highest_tx_id
-            highest_tx_id = highest_tx_id.max(transaction.tx_id);
+            if highest_tx.tx_id < transaction.tx_id {
+                highest_tx = transaction.clone();
+            }
         }
 
         // Update cursor for the next iteration
@@ -196,7 +198,7 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
         }
     }
 
-    Ok((liquidity_array, highest_tx_id))
+    Ok((liquidity_array, highest_tx))
 }
 
 #[cfg(test)]

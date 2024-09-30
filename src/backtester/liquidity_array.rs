@@ -156,7 +156,6 @@ impl LiquidityArray {
 
     // ALSO initializes/uninitializes ticks.
     // ONLY USED FOR LIQ TRANSACTIONS AND LIVE POSITIONS SET UP.
-    // LIQUIDITY IS ALWAYS ABOVE 0.
     pub fn update_liquidity(
         &mut self,
         lower_tick: i32,
@@ -198,6 +197,7 @@ impl LiquidityArray {
             }
         }
     }
+
     pub fn add_owners_position(&mut self, position: OwnersPosition, position_id: String) {
         self.positions.insert(position_id.clone(), position.clone());
         self.update_liquidity(
@@ -325,14 +325,14 @@ impl LiquidityArray {
         let mut amount_out = U256::zero();
 
         while remaining_amount > U256::zero() {
-            thread::sleep(Duration::from_millis(50));
+            // thread::sleep(Duration::from_millis(50));
 
             let liquidity = self.active_liquidity;
 
             let upper_initialized_tick_data = self.cached_upper_initialized_tick.unwrap();
             let lower_initialized_tick_data = self.cached_lower_initialized_tick.unwrap();
 
-            println!("CURRENT TICK: {}", current_tick);
+            // println!("CURRENT TICK: {}", current_tick);
             // println!("CURRENT LIQ: {:?}", self.active_liquidity);
 
             // println!(
@@ -423,8 +423,14 @@ impl LiquidityArray {
                     relevant_tick = lower_initialized_tick_data;
 
                     self.fee_growth_global_a += fee_growth;
+                    // relevant_tick.fee_growth_outside_a =
+                    //     self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
+
+                    // Update fee growth outside for the crossed tick
                     relevant_tick.fee_growth_outside_a =
                         self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
+                    relevant_tick.fee_growth_outside_b =
+                        self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
                     let (_, amount_b) = calculate_amounts(
                         liquidity,
@@ -452,6 +458,12 @@ impl LiquidityArray {
                     relevant_tick = upper_initialized_tick_data;
 
                     self.fee_growth_global_b += fee_growth;
+                    // relevant_tick.fee_growth_outside_b =
+                    //     self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
+
+                    // Update fee growth outside for the crossed tick
+                    relevant_tick.fee_growth_outside_a =
+                        self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
                     relevant_tick.fee_growth_outside_b =
                         self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
@@ -481,11 +493,11 @@ impl LiquidityArray {
                 remaining_amount -= step_amount;
             }
         }
-        println!("HOW MUCH AMOUNT IN: {:?}", amount_in);
+        // println!("HOW MUCH AMOUNT IN: {:?}", amount_in);
 
-        println!("HOW MUCH WE CALCULATED TO SWAP OUT: {:?}", amount_out);
+        // println!("HOW MUCH WE CALCULATED TO SWAP OUT: {:?}", amount_out);
 
-        println!("NEW SWAP /n /n:");
+        // println!("NEW SWAP /n /n:");
 
         self.current_tick = current_tick;
         self.current_sqrt_price = current_sqrt_price;
