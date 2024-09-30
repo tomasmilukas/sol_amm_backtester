@@ -29,17 +29,17 @@ pub fn calculate_liquidity(
     upper_sqrt_price: U256,
 ) -> U256 {
     if current_sqrt_price <= lower_sqrt_price {
-        calculate_a(amount_a, lower_sqrt_price, upper_sqrt_price)
+        calculate_liquidity_a(amount_a, lower_sqrt_price, upper_sqrt_price)
     } else if current_sqrt_price >= upper_sqrt_price {
-        calculate_b(amount_b, lower_sqrt_price, upper_sqrt_price)
+        calculate_liquidity_b(amount_b, lower_sqrt_price, upper_sqrt_price)
     } else {
-        let l_a = calculate_a(amount_a, current_sqrt_price, upper_sqrt_price);
-        let l_b = calculate_b(amount_b, lower_sqrt_price, current_sqrt_price);
+        let l_a = calculate_liquidity_a(amount_a, current_sqrt_price, upper_sqrt_price);
+        let l_b = calculate_liquidity_b(amount_b, lower_sqrt_price, current_sqrt_price);
         l_a.min(l_b)
     }
 }
 
-pub fn calculate_a(amount: U256, lower_sqrt_price: U256, upper_sqrt_price: U256) -> U256 {
+pub fn calculate_liquidity_a(amount: U256, lower_sqrt_price: U256, upper_sqrt_price: U256) -> U256 {
     amount
         .checked_mul(lower_sqrt_price)
         .and_then(|v| v.checked_mul(upper_sqrt_price))
@@ -48,10 +48,45 @@ pub fn calculate_a(amount: U256, lower_sqrt_price: U256, upper_sqrt_price: U256)
         .unwrap()
 }
 
-pub fn calculate_b(amount: U256, lower_sqrt_price: U256, upper_sqrt_price: U256) -> U256 {
+pub fn calculate_liquidity_b(amount: U256, lower_sqrt_price: U256, upper_sqrt_price: U256) -> U256 {
     amount
         .checked_mul(Q64)
         .and_then(|v| v.checked_div(upper_sqrt_price.checked_sub(lower_sqrt_price)?))
+        .unwrap()
+}
+
+pub fn calculate_token_a_from_liquidity(
+    liquidity: U256,
+    sqrt_price_current: U256,
+    sqrt_price_upper: U256,
+) -> U256 {
+    // Calculate (sqrt_price_upper - sqrt_price_current) * Q128 / (sqrt_price_current * sqrt_price_upper)
+    let numerator = sqrt_price_upper
+        .checked_sub(sqrt_price_current)
+        .unwrap()
+        .checked_mul(Q128)
+        .unwrap();
+
+    let denominator = sqrt_price_current.checked_mul(sqrt_price_upper).unwrap();
+
+    let inverse_diff = numerator.checked_div(denominator).unwrap();
+
+    // Multiply by liquidity and divide by Q64 to adjust for fixed-point representation
+    liquidity
+        .checked_mul(inverse_diff)
+        .unwrap()
+        .checked_div(Q64)
+        .unwrap()
+}
+
+pub fn calculate_token_b_from_liquidity(
+    liquidity: U256,
+    sqrt_price_current: U256,
+    sqrt_price_lower: U256,
+) -> U256 {
+    liquidity
+        .checked_mul(sqrt_price_current.checked_sub(sqrt_price_lower).unwrap())
+        .and_then(|v| v.checked_div(Q64))
         .unwrap()
 }
 

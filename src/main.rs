@@ -374,6 +374,10 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     println!("\n{}", "Strategy Results".bold().underline());
     println!("{}", "=================".bold());
 
+    println!("\n{}", "Timespan of strategy".underline());
+    println!("  From:        {}", highest_tx.block_time_utc);
+    println!("  To:          {}", tx_to_sync_from.block_time_utc);
+
     println!("\n{}", "Price Changes".underline());
     // println!(
     //     "  Price change over period: {}%",
@@ -418,11 +422,11 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         ending_total_value_in_usd
     );
     println!(
-        "  Total value change in USD:        ${}",
+        "  Total PnL in USD:                 ${}",
         format!("{:.3}", final_value_total).green()
     );
     println!(
-        "  Total value change in pct:          {}%",
+        "  Total PnL in pct:                  {}%",
         format!(
             "{:.3}",
             (final_value_total / starting_total_value_in_usd) * 100.0
@@ -432,14 +436,14 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
 
     println!("\n{}", "LPing analysis".underline());
     println!(
-        "  Profits vs holding in USD:        ${:.3}",
+        "  Profits LPing in USD:           ${:.3}",
         final_value_total - pnl_no_lping
     );
     println!(
-        "  Profits vs holding in pct:         {}%",
+        "  Profits LPing in pct:            {}%",
         format!(
             "{:.3}",
-            ((final_value_total - pnl_no_lping) / pnl_no_lping) * 100.0
+            ((final_value_total - pnl_no_lping) / starting_total_value_in_usd) * 100.0
         )
         .red()
     );

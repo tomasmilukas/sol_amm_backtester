@@ -6,8 +6,9 @@ use crate::{
     utils::{
         error::{BacktestError, SyncError},
         price_calcs::{
-            calculate_amounts, calculate_liquidity, calculate_rebalance_amount,
-            tick_to_sqrt_price_u256, Q128, Q64, U256,
+            calculate_amounts, calculate_liquidity, calculate_liquidity_a, calculate_liquidity_b,
+            calculate_rebalance_amount, calculate_token_a_from_liquidity,
+            calculate_token_b_from_liquidity, tick_to_sqrt_price_u256, Q128, Q64, U256,
         },
     },
 };
@@ -345,79 +346,123 @@ impl Backtest {
                     let lower_sqrt_price = tick_to_sqrt_price_u256(lower_tick);
                     let curr_sqrt_price = self.liquidity_arr.current_sqrt_price;
 
+                    println!("CURRENT TICK: {}", self.liquidity_arr.current_tick);
+
                     // Since the tick might be anywhere in between lower and upper provided ticks from env, we need to rebalance.
-                    // 1.0 - rebalance ratio since rebalance ratio is used to get the new ratio of amount_a.
-                    let rebalance_ratio = (((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
-                        / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64));
+                    // The ratio nmr represents how much % of assets should be in token_a. If ratio is 0.3, then 30% should be in token a. Since token a is on upper side of liquidity.
+                    let rebalance_ratio = ((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
+                        / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64);
 
-                    println!(
-                        "PRICES: {} {} {}",
-                        upper_sqrt_price, lower_sqrt_price, curr_sqrt_price
-                    );
+                    let current_price = (curr_sqrt_price * curr_sqrt_price) / Q128;
+                    let total_amount_a = (amount_a + amount_b / current_price).as_u128() as f64;
+                    let current_ratio = amount_a.as_u128() as f64 / total_amount_a;
 
-                    let (amount_to_sell, is_sell) = calculate_rebalance_amount(
-                        amount_a,
-                        amount_b,
-                        curr_sqrt_price,
-                        U256::from((rebalance_ratio * Q64.as_u128() as f64) as u128),
-                    );
+                    println!("RATIOS: {} {}", rebalance_ratio, current_ratio);
+                    println!("TOTAL AMOUNT A: {}", total_amount_a);
+                    println!("TOTAL AMOUNT B: {}", amount_a * current_price + amount_b);
 
-                    println!("REBALANCE RATIO: {}", rebalance_ratio);
+                    // If price is closer to upper limit, we mainly provide liquidity in B. Therefore we need to sell more token A if its below current ratio (representing b).
+                    if current_ratio > rebalance_ratio {
+                        let hypothetical_amount_a = rebalance_ratio * total_amount_a;
+                        let hypothetical_amount_b = ((1.0 - rebalance_ratio) * total_amount_a)
+                            * current_price.as_u128() as f64;
 
-                    println!("INFO: {} {}", amount_to_sell, is_sell);
+                        println!("HYPOTHETICAL AMOUNT A: {}", hypothetical_amount_a as u128);
+                        println!("HYPOTHETICAL AMOUNT B: {}", hypothetical_amount_b as u128);
 
-                    let amount_out = self.liquidity_arr.simulate_swap(amount_to_sell, is_sell)?;
+                        println!(
+                            "THEORETICAL AMOUNT A: {}",
+                            ((amount_a * current_price + amount_b).as_u128() as f64
+                                - hypothetical_amount_b)
+                                / current_price.as_u128() as f64
+                        );
 
-                    println!("INFO 2: {}", amount_out);
+                        // since we want to maximise the amount of liquidity provided, we will provide price range + amount_a or amount_b and get liquidity back
+                        // then with one of the unknown amounts, we can calculate the right amount to LP in, otherwise if we use both given amount_a and amount_b we will provide a low amount of our capital.
 
-                    // have the correct final amounts
-                    let (amount_a, amount_b) = if is_sell {
-                        (amount_a - amount_to_sell, amount_b + amount_out)
-                    } else {
-                        (amount_a + amount_out, amount_b - amount_to_sell)
-                    };
+                        let liquidity_b = calculate_liquidity_b(
+                            U256::from(hypothetical_amount_b as u128),
+                            lower_sqrt_price,
+                            curr_sqrt_price,
+                        );
 
-                    println!("FINAL AMOUNTS FOR LIQ: {} {}", amount_a, amount_b);
+                        let liquidity_a = calculate_liquidity_a(
+                            U256::from(hypothetical_amount_a as u128),
+                            curr_sqrt_price,
+                            upper_sqrt_price,
+                        );
 
-                    // calculate the potential liquidity that would be created in the pool
-                    let liquidity = calculate_liquidity(
-                        U256::zero(),
-                        amount_b,
-                        curr_sqrt_price,
-                        lower_sqrt_price,
-                        upper_sqrt_price,
-                    );
+                        let amount_a_needed = calculate_token_a_from_liquidity(
+                            liquidity_b,
+                            curr_sqrt_price,
+                            upper_sqrt_price,
+                        );
 
-                    println!("LIQ: {}", liquidity);
+                        let amount_b_needed = calculate_token_b_from_liquidity(
+                            liquidity_b,
+                            curr_sqrt_price,
+                            lower_sqrt_price,
+                        );
 
-                    // reverse the liquidity calculation to see how much the pools would truly accept
-                    let (amount_a, amount_b) = calculate_amounts(
-                        liquidity,
-                        curr_sqrt_price,
-                        lower_sqrt_price,
-                        upper_sqrt_price,
-                    );
+                        println!("FIRST LIQ B: {}", liquidity_b);
+                        println!("FIRST LIQ A: {}", liquidity_a);
 
-                    println!(
-                        "Provided liquidity with amount a: {} and amount b: {}",
-                        amount_a, amount_b
-                    );
+                        println!("AMOUNT A FOR FIRST LIQ: {}", amount_a_needed);
+                        println!("AMOUNT B FOR FIRST LIQ: {}", amount_b_needed);
 
-                    self.liquidity_arr.add_owners_position(
-                        OwnersPosition {
-                            owner: String::from(""),
-                            lower_tick,
-                            upper_tick,
-                            liquidity: liquidity.as_u128() as i128,
-                            fee_growth_inside_a_last: U256::zero(),
-                            fee_growth_inside_b_last: U256::zero(),
-                        },
-                        position_id,
-                    );
+                        let amount_a_to_sell = amount_a - amount_a_needed;
 
-                    // adjust wallet amounts
-                    self.wallet.amount_token_a -= amount_a;
-                    self.wallet.amount_token_b -= amount_b;
+                        let amount_out =
+                            self.liquidity_arr.simulate_swap(amount_a_to_sell, true)?;
+
+                        println!("AMOUNT A TO SELL: {}", amount_a_to_sell);
+                        println!("AMOUNT OUT: {}", amount_out);
+
+                        let latest_amount_a_in_wallet = amount_a - amount_a_to_sell;
+                        let latest_amount_b_in_wallet = amount_b + amount_out;
+
+                        let newest_liquidity = calculate_liquidity(
+                            latest_amount_a_in_wallet,
+                            latest_amount_b_in_wallet,
+                            curr_sqrt_price,
+                            lower_sqrt_price,
+                            upper_sqrt_price,
+                        );
+
+                        // println!("LATEST AMOUNTS: {} {}", latest_amount_a, latest_amount_b);
+                        println!("RECALCULATED LIQ: {}", newest_liquidity);
+
+                        let (amount_a_provided_to_pool, amount_b_provided_to_pool) =
+                            calculate_amounts(
+                                newest_liquidity,
+                                curr_sqrt_price,
+                                lower_sqrt_price,
+                                upper_sqrt_price,
+                            );
+
+                        println!(
+                            "AMOUNTS ACTUALLY LPed: {} {}",
+                            amount_a_provided_to_pool, amount_b_provided_to_pool
+                        );
+
+                        self.wallet.amount_token_a =
+                            latest_amount_a_in_wallet - amount_a_provided_to_pool;
+                        self.wallet.amount_token_b =
+                            latest_amount_b_in_wallet - amount_b_provided_to_pool;
+
+                        self.liquidity_arr.add_owners_position(
+                            OwnersPosition {
+                                owner: String::from(""),
+                                lower_tick,
+                                upper_tick,
+                                liquidity: newest_liquidity.as_u128() as i128,
+                                fee_growth_inside_a_last: U256::zero(),
+                                fee_growth_inside_b_last: U256::zero(),
+                            },
+                            position_id,
+                        );
+                    } else { //we need less amount_a than current ratio of assets has. aka buy some amount_a
+                    }
                 }
                 Action::FinalizeStrategy {
                     position_id,
