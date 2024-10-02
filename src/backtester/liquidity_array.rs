@@ -2,7 +2,7 @@ use std::{collections::HashMap, thread, time::Duration};
 
 use crate::utils::{
     error::LiquidityArrayError,
-    price_calcs::{
+    core_math::{
         calculate_amounts, calculate_new_sqrt_price, tick_to_sqrt_price_u256, Q128, U256,
     },
 };
@@ -507,7 +507,7 @@ impl LiquidityArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::price_calcs::{calculate_liquidity, price_to_tick};
+    use crate::utils::core_math::{calculate_liquidity, price_to_tick};
 
     use super::*;
 
