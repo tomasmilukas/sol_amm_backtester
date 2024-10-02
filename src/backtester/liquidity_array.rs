@@ -1,10 +1,8 @@
 use std::{collections::HashMap, thread, time::Duration};
 
 use crate::utils::{
+    core_math::{calculate_amounts, calculate_new_sqrt_price, tick_to_sqrt_price_u256, Q128, U256},
     error::LiquidityArrayError,
-    core_math::{
-        calculate_amounts, calculate_new_sqrt_price, tick_to_sqrt_price_u256, Q128, U256,
-    },
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -219,6 +217,7 @@ impl LiquidityArray {
                 position.liquidity,
                 false,
             );
+
             Ok(position)
         } else {
             Err(LiquidityArrayError::PositionNotFound(

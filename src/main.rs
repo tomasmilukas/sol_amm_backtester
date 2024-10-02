@@ -271,9 +271,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         .await
         .unwrap();
 
-    // Price calculations from start to show growth in strategy in USD.
-    // We are using Binance public market data for pricing so niche tokens will not be supported.
-
     let token_metadata_api = TokenMetadataApi::new()?;
     let price_api = PriceApi::new()?;
 
@@ -284,7 +281,8 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         &highest_tx,
         &tx_to_sync_from,
     )
-    .await.unwrap();
+    .await
+    .unwrap();
 
     println!("\n{}", "Strategy Results".bold().underline());
     println!("{}", "=================".bold());
@@ -333,12 +331,36 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
 
     println!("\n{}", "LPing analysis".underline());
     println!(
-        "  Profits LPing in USD:           ${:.3}",
-        result.total_fees_collected_in_usd
+        "  Tokens A earned:                   {:.6}",
+        result.token_a_collected_fees
     );
     println!(
-        "  Profits LPing in pct:            {}%",
+        "  Tokens B earned:                   {:.6}",
+        result.token_b_collected_fees
+    );
+    println!(
+        "  Capital earned (in token A):       {:.6}",
+        result.capital_earned_in_token_a
+    );
+    println!(
+        "  Capital earned in pct:             {}%",
+        format!("{:.3}", result.capital_earned_in_token_a_in_pct).red()
+    );
+    println!(
+        "  Profits LPing in USD:             ${}",
+        format!("{:.3}", result.total_fees_collected_in_usd).red()
+    );
+    println!(
+        "  Profits LPing in pct:              {}%",
         format!("{:.3}", result.lping_profits_pct).red()
+    );
+    println!(
+        "  Profits pct from price accruals:   {}%",
+        format!(
+            "{:.3}",
+            result.lping_profits_pct - result.capital_earned_in_token_a_in_pct
+        )
+        .red()
     );
 
     Ok(())

@@ -1,7 +1,13 @@
 use chrono::{DateTime, Utc};
 use std::error::Error;
 
-use crate::{api::{price_api::PriceApi, token_metadata_api::TokenMetadataApi}, backtester::backtester::Backtest, models::transactions_model::TransactionModelFromDB};
+use crate::{
+    api::{price_api::PriceApi, token_metadata_api::TokenMetadataApi},
+    backtester::backtester::Backtest,
+    models::transactions_model::TransactionModelFromDB,
+};
+
+use super::core_math::Q128;
 
 pub struct PriceCalculationResult {
     pub start_time: DateTime<Utc>,
@@ -14,10 +20,16 @@ pub struct PriceCalculationResult {
     pub ending_total_value_in_usd: f64,
     pub final_value_total: f64,
     pub total_pnl_pct: f64,
+    pub token_a_collected_fees: f64,
+    pub token_b_collected_fees: f64,
+    pub capital_earned_in_token_a: f64,
+    pub capital_earned_in_token_a_in_pct: f64,
     pub total_fees_collected_in_usd: f64,
     pub lping_profits_pct: f64,
 }
 
+// Price calculations from start to show growth in strategy in USD.
+// We are using Binance public market data for pricing so niche tokens will not be supported
 pub async fn calculate_prices_and_pnl(
     token_metadata_api: &TokenMetadataApi,
     price_api: &PriceApi,
@@ -53,29 +65,51 @@ pub async fn calculate_prices_and_pnl(
     let starting_amount_token_b = (backtest.start_info.token_b_amount.as_u128() as f64)
         / 10.0f64.powi(backtest.wallet.token_b_decimals as i32);
 
+    let a_b_end_price = ((backtest.liquidity_arr.current_sqrt_price
+        * backtest.liquidity_arr.current_sqrt_price)
+        / Q128)
+        .as_u128() as f64;
+    let a_b_start_price = starting_amount_token_b / starting_amount_token_a;
+
+    println!("PRICES: {} {}", a_b_end_price, a_b_start_price);
+
     let starting_total_value_in_usd = starting_amount_token_a * token_a_starting_price_usd
         + starting_amount_token_b * token_b_starting_price_usd;
 
     let start_amount_end_value_in_usd = starting_amount_token_a * token_a_ending_price_usd
         + starting_amount_token_b * token_b_ending_price_usd;
 
-    let ending_total_value_in_usd = (backtest.wallet.amount_token_a.as_u128() as f64
-        / 10.0f64.powi(backtest.wallet.token_a_decimals as i32))
-        * token_a_ending_price_usd
-        + (backtest.wallet.amount_token_b.as_u128() as f64
-            / 10.0f64.powi(backtest.wallet.token_b_decimals as i32))
-            * token_b_ending_price_usd;
+    // Fees already included when closing position in backtester.
+    let token_a_end_amount = backtest.wallet.amount_token_a.as_u128() as f64
+        / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
+    let token_b_end_amount = backtest.wallet.amount_token_b.as_u128() as f64
+        / 10.0f64.powi(backtest.wallet.token_b_decimals as i32);
+
+    let ending_total_value_in_usd = token_a_end_amount * token_a_ending_price_usd
+        + token_b_end_amount * token_b_ending_price_usd;
 
     let pnl_no_lping = start_amount_end_value_in_usd - starting_total_value_in_usd;
-    let pnl_no_lping_pct = ((start_amount_end_value_in_usd - starting_total_value_in_usd)
-        / starting_total_value_in_usd)
-        * 100.0;
+    let pnl_no_lping_pct = (pnl_no_lping / starting_total_value_in_usd) * 100.0;
 
     let final_value_total = ending_total_value_in_usd - starting_total_value_in_usd;
 
-    let total_fees_collected_in_usd = (backtest.wallet.amount_a_fees_collected.as_u128() as f64
-        * token_a_ending_price_usd)
-        + (backtest.wallet.amount_b_fees_collected.as_u128() as f64 * token_b_ending_price_usd);
+    let token_a_collected_fees = (backtest.wallet.amount_a_fees_collected.as_u128() as f64)
+        / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
+
+    let token_b_collected_fees = (backtest.wallet.amount_b_fees_collected.as_u128() as f64)
+        / 10.0f64.powi(backtest.wallet.token_b_decimals as i32);
+
+    let total_fees_collected_in_usd = (token_a_collected_fees * token_a_ending_price_usd)
+        + (token_b_collected_fees * token_b_ending_price_usd);
+
+    let total_pnl_pct = (final_value_total / starting_total_value_in_usd) * 100.0;
+    let lping_profits_pct = (total_fees_collected_in_usd / starting_total_value_in_usd) * 100.0;
+
+    let capital_earned_in_token_a = token_a_collected_fees + token_b_collected_fees / a_b_end_price;
+
+    let capital_earned_in_token_a_in_pct = (capital_earned_in_token_a
+        / (starting_amount_token_a + starting_amount_token_b / a_b_start_price))
+        * 100.0;
 
     let token_a_price_change_pct = ((token_a_ending_price_usd - token_a_starting_price_usd)
         / token_a_starting_price_usd)
@@ -83,8 +117,20 @@ pub async fn calculate_prices_and_pnl(
     let token_b_price_change_pct = ((token_b_ending_price_usd - token_b_starting_price_usd)
         / token_b_starting_price_usd)
         * 100.0;
-    let total_pnl_pct = (final_value_total / starting_total_value_in_usd) * 100.0;
-    let lping_profits_pct = (total_fees_collected_in_usd / starting_total_value_in_usd) * 100.0;
+
+    println!(
+        "STARTING TOTAL AMOUNTS {} {}",
+        starting_amount_token_a, starting_amount_token_b
+    );
+    println!(
+        "ENDING TOTAL AMOUNTS: {} {}",
+        token_a_end_amount, token_b_end_amount
+    );
+    println!(
+        "DIFF: {} {}",
+        token_a_end_amount - starting_amount_token_a,
+        token_b_end_amount - starting_amount_token_b
+    );
 
     Ok(PriceCalculationResult {
         start_time: highest_tx.block_time_utc,
@@ -97,6 +143,10 @@ pub async fn calculate_prices_and_pnl(
         ending_total_value_in_usd,
         final_value_total,
         total_pnl_pct,
+        token_a_collected_fees,
+        token_b_collected_fees,
+        capital_earned_in_token_a,
+        capital_earned_in_token_a_in_pct,
         total_fees_collected_in_usd,
         lping_profits_pct,
     })
