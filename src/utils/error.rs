@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use super::price_calcs::U256;
+use super::core_math::U256;
 
 #[derive(Debug)]
 pub struct PriceCalcError(pub String);

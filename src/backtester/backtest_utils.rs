@@ -8,7 +8,7 @@ use crate::{
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
         error::SyncError,
-        price_calcs::{price_to_tick, tick_to_sqrt_price_u256, U256},
+        core_math::{price_to_tick, tick_to_sqrt_price_u256, U256},
     },
 };
 
@@ -206,7 +206,7 @@ mod tests {
     use super::*;
     use crate::{
         models::transactions_model::{SwapData, TransactionData, TransactionModelFromDB},
-        utils::price_calcs::{calculate_liquidity, tick_to_sqrt_price_u256},
+        utils::core_math::{calculate_liquidity, tick_to_sqrt_price_u256},
     };
     use anyhow::Result;
     use async_trait::async_trait;

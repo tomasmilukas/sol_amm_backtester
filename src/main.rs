@@ -41,7 +41,7 @@ use services::{
 };
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc};
-use utils::price_calcs::U256;
+use utils::{core_math::U256, profit_calcs::calculate_prices_and_pnl};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -279,242 +279,69 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     let token_metadata_api = TokenMetadataApi::new()?;
     let price_api = PriceApi::new()?;
 
-    let token_a_addr = backtest.wallet.token_a_addr;
-    let token_b_addr = backtest.wallet.token_b_addr;
-
-    let token_addr_arr = [token_a_addr.clone(), token_b_addr.clone()];
-
-    let symbols = token_metadata_api
-        .get_token_symbols_for_addresses(&token_addr_arr)
-        .await?;
-
-    // Symbols for binance
-    let token_a_symbol = symbols[0].clone() + "USDT";
-    let token_b_symbol = symbols[1].clone() + "USDT";
-
-    let token_a_starting_price_usd = price_api
-        .get_historical_price(&token_a_symbol, highest_tx.block_time_utc)
-        .await?;
-    let token_a_ending_price_usd = price_api
-        .get_historical_price(&token_a_symbol, tx_to_sync_from.block_time_utc)
-        .await?;
-
-    let token_b_starting_price_usd = price_api
-        .get_historical_price(&token_b_symbol, highest_tx.block_time_utc)
-        .await?;
-    let token_b_ending_price_usd = price_api
-        .get_historical_price(&token_b_symbol, tx_to_sync_from.block_time_utc)
-        .await?;
-
-    let starting_amount_token_a = (backtest.start_info.token_a_amount.as_u128() as f64)
-        / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
-
-    let starting_amount_token_b = (backtest.start_info.token_b_amount.as_u128() as f64)
-        / 10.0f64.powi(backtest.wallet.token_b_decimals as i32);
-
-    let starting_total_value_in_usd = starting_amount_token_a * token_a_starting_price_usd
-        + starting_amount_token_b * token_b_starting_price_usd;
-
-    // To calculate PnL if we only held.
-    let start_amount_end_value_in_usd = starting_amount_token_a * token_a_ending_price_usd
-        + starting_amount_token_b * token_b_ending_price_usd;
-
-    let ending_total_value_in_usd = (backtest.wallet.amount_token_a.as_u128() as f64
-        / 10.0f64.powi(backtest.wallet.token_a_decimals as i32))
-        * token_a_ending_price_usd
-        + (backtest.wallet.amount_token_b.as_u128() as f64
-            / 10.0f64.powi(backtest.wallet.token_b_decimals as i32))
-            * token_b_ending_price_usd;
-
-    let pnl_no_lping = start_amount_end_value_in_usd - starting_total_value_in_usd;
-    let pnl_no_lping_pct = ((start_amount_end_value_in_usd - starting_total_value_in_usd)
-        / starting_total_value_in_usd)
-        * 100.0;
-
-    let final_value_total = ending_total_value_in_usd - starting_total_value_in_usd;
-
-    // println!(
-    //     "Token A price change in USD pct: {:.3}%",
-    //     ((token_a_ending_price_usd - token_a_starting_price_usd) / token_a_starting_price_usd)
-    //         * 100.0
-    // );
-    // println!(
-    //     "Token B price change in USD pct: {:.3}%",
-    //     ((token_b_ending_price_usd - token_b_starting_price_usd) / token_b_starting_price_usd)
-    //         * 100.0
-    // );
-
-    // println!(
-    //     "PnL in USD if held (no LPing): {:.3}",
-    //     start_amount_end_value_in_usd - starting_total_value_in_usd
-    // );
-    // println!(
-    //     "PnL in USD if held in pct (no LPing): {:.3}%",
-    //     ((start_amount_end_value_in_usd - starting_total_value_in_usd)
-    //         / starting_total_value_in_usd)
-    //         * 100.0
-    // );
-
-    // println!(
-    //     "Total value starting in USD: {:.3}",
-    //     starting_total_value_in_usd
-    // );
-    // println!(
-    //     "Total value ending in USD: {:.3}",
-    //     ending_total_value_in_usd
-    // );
-    // println!(
-    //     "Total value changed in USD pct: {:.3}%",
-    //     ((ending_total_value_in_usd - starting_total_value_in_usd) / starting_total_value_in_usd)
-    //         * 100.0
-    // );
+    let result = calculate_prices_and_pnl(
+        &token_metadata_api,
+        &price_api,
+        &backtest,
+        &highest_tx,
+        &tx_to_sync_from,
+    )
+    .await.unwrap();
 
     println!("\n{}", "Strategy Results".bold().underline());
     println!("{}", "=================".bold());
 
     println!("\n{}", "Timespan of strategy".underline());
-    println!("  From:        {}", highest_tx.block_time_utc);
-    println!("  To:          {}", tx_to_sync_from.block_time_utc);
+    println!("  From:        {}", result.start_time);
+    println!("  To:          {}", result.end_time);
 
     println!("\n{}", "Price Changes".underline());
-    // println!(
-    //     "  Price change over period: {}%",
-    //     format!("{:.2}", price_pct_change).red()
-    // );
     println!(
         "  Token A price change (vs USD):     {}%",
-        format!(
-            "{:.3}",
-            ((token_a_ending_price_usd - token_a_starting_price_usd) / token_a_starting_price_usd)
-                * 100.0
-        )
-        .yellow()
+        format!("{:.3}", result.token_a_price_change_pct).yellow()
     );
     println!(
         "  Token B price change (vs USD):     {}%",
-        format!(
-            "{:.3}",
-            ((token_b_ending_price_usd - token_b_starting_price_usd) / token_b_starting_price_usd)
-                * 100.0
-        )
-        .yellow()
+        format!("{:.3}", result.token_b_price_change_pct).yellow()
     );
 
     println!("\n{}", "Holding Analysis".underline());
     println!(
         "  PnL if held (no LPing):           ${}",
-        format!("{:.3}", pnl_no_lping).blue()
+        format!("{:.3}", result.pnl_no_lping).blue()
     );
     println!(
         "  PnL if held pct (no LPing):        {}%",
-        format!("{:.3}", pnl_no_lping_pct).blue()
+        format!("{:.3}", result.pnl_no_lping_pct).blue()
     );
 
     println!("\n{}", "Total Value Analysis".underline());
     println!(
         "  Starting value in USD:            ${:.3}",
-        starting_total_value_in_usd
+        result.starting_total_value_in_usd
     );
     println!(
         "  Ending value in USD:              ${:.3}",
-        ending_total_value_in_usd
+        result.ending_total_value_in_usd
     );
     println!(
         "  Total PnL in USD:                 ${}",
-        format!("{:.3}", final_value_total).green()
+        format!("{:.3}", result.final_value_total).green()
     );
     println!(
         "  Total PnL in pct:                  {}%",
-        format!(
-            "{:.3}",
-            (final_value_total / starting_total_value_in_usd) * 100.0
-        )
-        .green()
+        format!("{:.3}", result.total_pnl_pct).green()
     );
 
     println!("\n{}", "LPing analysis".underline());
     println!(
         "  Profits LPing in USD:           ${:.3}",
-        final_value_total - pnl_no_lping
+        result.total_fees_collected_in_usd
     );
     println!(
         "  Profits LPing in pct:            {}%",
-        format!(
-            "{:.3}",
-            ((final_value_total - pnl_no_lping) / starting_total_value_in_usd) * 100.0
-        )
-        .red()
+        format!("{:.3}", result.lping_profits_pct).red()
     );
-
-    // if token_a_addr == SOL_ADDR || token_b_addr == SOL_ADDR {
-    //     let sol_is_token_a = token_a_addr == SOL_ADDR;
-
-    //     let starting_price =
-    //         (starting_sqrt_price_pre_sync_forward * starting_sqrt_price_pre_sync_forward) / Q128;
-
-    //     let current_price = (backtest.liquidity_arr.current_sqrt_price
-    //         * backtest.liquidity_arr.current_sqrt_price)
-    //         / Q128;
-
-    //     println!(
-    //         "SOL price change in USD pct: {:.3}%",
-    //         ((sol_ending_price_usd - sol_starting_price_usd) / sol_starting_price_usd) * 100.0
-    //     );
-
-    //     // convert to final value in token a
-    //     if sol_is_token_a {
-    //         let starting_total_value = (backtest.start_info.token_a_amount
-    //             + (backtest.start_info.token_b_amount / starting_price))
-    //             .as_u128() as f64
-    //             / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
-
-    //         let starting_usd_total_value = starting_total_value * sol_starting_price_usd;
-
-    //         let ending_total_value = (backtest.wallet.amount_token_a
-    //             + (backtest.wallet.amount_token_b / current_price))
-    //             .as_u128() as f64
-    //             / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
-
-    //         let ending_usd_total_value = ending_total_value * sol_ending_price_usd;
-
-    //         println!(
-    //             "Total profit in USD: {:.3}",
-    //             ending_usd_total_value - starting_usd_total_value
-    //         );
-    //         println!(
-    //             "Total profit pct in USD: {:.3}%",
-    //             ((ending_usd_total_value - starting_usd_total_value) / starting_usd_total_value)
-    //                 * 100.0
-    //         );
-    //     } else {
-    //         // convert to final value in token b
-    //         let starting_total_value = (backtest.start_info.token_b_amount
-    //             + (backtest.start_info.token_a_amount / starting_price))
-    //             .as_u128() as f64
-    //             / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
-
-    //         let starting_usd_total_value = starting_total_value * sol_starting_price_usd;
-
-    //         let ending_total_value = (backtest.wallet.amount_token_b
-    //             + (backtest.wallet.amount_token_a / current_price))
-    //             .as_u128() as f64
-    //             / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
-
-    //         let ending_usd_total_value = ending_total_value * sol_ending_price_usd;
-
-    //         println!(
-    //             "Total profit in USD: {:.3}",
-    //             ending_usd_total_value - starting_usd_total_value
-    //         );
-    //         println!(
-    //             "Total profit pct in USD: {:.3}%",
-    //             ((ending_usd_total_value - starting_usd_total_value) / starting_usd_total_value)
-    //                 * 100.0
-    //         );
-    //     }
-    // } else {
-    //     println!("No mapping for SOL addresses => symbols, must calculate manually. Only SOL -> USDC conversion supported for now.")
-    // };
 
     Ok(())
 }
