@@ -4,12 +4,12 @@ use crate::{
     models::transactions_model::TransactionModelFromDB,
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
-        error::{BacktestError, SyncError},
         core_math::{
             calculate_amounts, calculate_liquidity, calculate_liquidity_a, calculate_liquidity_b,
             calculate_token_a_from_liquidity, calculate_token_b_from_liquidity,
             tick_to_sqrt_price_u256, Q128, U256,
         },
+        error::{BacktestError, SyncError},
     },
 };
 
@@ -210,10 +210,14 @@ impl Backtest {
                     let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
                     let position = self.liquidity_arr.remove_owners_position(&position_id)?;
 
+                    println!("CURRENT TICK: {}", self.liquidity_arr.current_tick);
+
                     println!("Fees in token_a: {}, fees in token_b: {}", fees_a, fees_b);
 
                     self.wallet.amount_a_fees_collected += fees_a;
                     self.wallet.amount_b_fees_collected += fees_b;
+
+                    println!("LIQ OF CLOSING POSITION: {}", position.liquidity);
 
                     let (amount_a, amount_b) = calculate_amounts(
                         U256::from(position.liquidity),
@@ -221,9 +225,10 @@ impl Backtest {
                         tick_to_sqrt_price_u256(position.lower_tick),
                         tick_to_sqrt_price_u256(position.upper_tick),
                     );
+                    println!("AMOUNTS FROM CLOSING POSITION: {} {}", amount_a, amount_b);
 
-                    self.wallet.amount_token_a += amount_a;
-                    self.wallet.amount_token_b += amount_b;
+                    self.wallet.amount_token_a += amount_a + fees_a;
+                    self.wallet.amount_token_b += amount_b + fees_b;
                 }
                 Action::CreatePosition {
                     position_id,
@@ -342,6 +347,10 @@ impl Backtest {
                     println!(
                         "Created position with liquidity {}, amount_a LPed: {}, amount_b LPed: {}",
                         newest_liquidity, amount_a_provided_to_pool, amount_b_provided_to_pool
+                    );
+                    println!(
+                        "Left in wallet - {} token A , {} token B",
+                        self.wallet.amount_token_a, self.wallet.amount_token_b
                     );
                 }
             }
