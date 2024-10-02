@@ -153,31 +153,6 @@ pub fn calculate_new_sqrt_price(
     }
 }
 
-// Use U256 for ratio, where 1.0 = Q64. Ratio of amount of token_a wanted in total.
-// If 0.9, result will give whats needed to sell to achieve 90% token_a and 10% token_b.
-pub fn calculate_rebalance_amount(
-    amount_a: U256,
-    amount_b: U256,
-    current_sqrt_price: U256,
-    rebalance_ratio: U256,
-) -> (U256, bool) {
-    let curr_price = ((current_sqrt_price * current_sqrt_price) / Q128).as_u128();
-    let total_amount_in_a = amount_a + (amount_b / curr_price);
-
-    // Calculate target amount of token A
-    let target_amount_a = total_amount_in_a * rebalance_ratio / Q64;
-
-    if amount_a > target_amount_a {
-        // Need to sell token A
-        (amount_a - target_amount_a, true)
-    } else {
-        // Need to sell token B
-        let target_amount_b =
-            (total_amount_in_a * (Q64 - rebalance_ratio) / Q64) * current_sqrt_price / Q64;
-        (amount_b - target_amount_b, false)
-    }
-}
-
 // THE LIQUIDITY AND AMOUNTS CALCULATIONS ARE CHECKED ON SAME POSITIONS AGAINST EACH OTHER.
 #[cfg(test)]
 mod tests {
@@ -341,97 +316,6 @@ mod tests {
             calculate_relative_error(U256::from(101503310_u128), amount_b),
             1e-5
         );
-    }
-
-    #[test]
-    fn test_calculate_rebalance_amount() {
-        // Test case: Need to sell token A
-        {
-            let amount_a = U256::from(1500);
-            let amount_b = U256::from(500);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token A");
-            assert_eq!(is_sell_a, true, "Should sell token A");
-            assert!(
-                amount_to_sell <= U256::from(500),
-                "Should not sell more than the imbalance"
-            );
-        }
-
-        // Test case: Need to sell token B
-        {
-            let amount_a = U256::from(500);
-            let amount_b = U256::from(1500);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token B");
-            assert_eq!(is_sell_a, false, "Should sell token B");
-            assert!(
-                amount_to_sell <= U256::from(500),
-                "Should not sell more than the imbalance"
-            );
-        }
-
-        // Test case 4: Rebalance to 60/40
-        {
-            let amount_a = U256::from(1000);
-            let amount_b = U256::from(1000);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = U256::from(6) * Q64 / 10; // 60%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token B");
-            assert_eq!(is_sell_a, false, "Should sell token B");
-            assert!(
-                amount_to_sell <= U256::from(200),
-                "Should sell approximately 10% of token B"
-            );
-        }
-
-        // Test case: Edge case - all token A
-        {
-            let amount_a = U256::from(1000);
-            let amount_b = U256::zero();
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token A");
-            assert!(
-                amount_to_sell <= U256::from(500),
-                "Should sell approximately half of token A"
-            );
-        }
-
-        // Test case: Edge case - all token B
-        {
-            let amount_a = U256::zero();
-            let amount_b = U256::from(1000);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token B");
-            assert!(
-                amount_to_sell <= U256::from(500) * Q64,
-                "Should sell approximately half of token B"
-            );
-        }
     }
 
     #[test]

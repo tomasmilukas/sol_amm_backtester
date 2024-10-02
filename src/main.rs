@@ -216,8 +216,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     )
     .await?;
 
-    let starting_sqrt_price_pre_sync_forward = original_starting_liquidity_arr.current_sqrt_price;
-
     println!("Sync backwards complete! Time to add position, sync forwards and calculate results!");
 
     let token_a_amount: u128 = config.get_strategy_detail("token_a_amount")?;
