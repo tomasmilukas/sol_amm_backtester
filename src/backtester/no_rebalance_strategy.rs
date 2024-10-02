@@ -1,4 +1,4 @@
-use crate::{models::transactions_model::TransactionModelFromDB, utils::price_calcs::U256};
+use crate::models::transactions_model::TransactionModelFromDB;
 
 use super::{
     backtester::{Action, Strategy},
@@ -20,13 +20,11 @@ impl NoRebalanceStrategy {
 }
 
 impl Strategy for NoRebalanceStrategy {
-    fn initialize_strategy(&self, amount_a: U256, amount_b: U256) -> Vec<Action> {
+    fn initialize_strategy(&self) -> Vec<Action> {
         vec![Action::CreatePosition {
             position_id: String::from("no_rebalance"),
             lower_tick: self.lower_tick,
             upper_tick: self.upper_tick,
-            amount_a,
-            amount_b,
         }]
     }
 
@@ -38,10 +36,9 @@ impl Strategy for NoRebalanceStrategy {
         vec![]
     }
 
-    fn finalize_strategy(&self, starting_sqrt_price: U256) -> Vec<Action> {
-        vec![Action::FinalizeStrategy {
+    fn finalize_strategy(&self) -> Vec<Action> {
+        vec![Action::ClosePosition {
             position_id: String::from("no_rebalance"),
-            starting_sqrt_price,
         }]
     }
 }

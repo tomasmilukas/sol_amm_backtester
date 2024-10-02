@@ -237,8 +237,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         token_b_decimals: pool_data.token_b_decimals,
         amount_a_fees_collected: U256::zero(),
         amount_b_fees_collected: U256::zero(),
-        total_profit: 0.0,
-        total_profit_pct: 0.0,
     };
 
     let strategy: Box<dyn Strategy> = match config.strategy {
