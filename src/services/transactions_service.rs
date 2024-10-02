@@ -68,6 +68,7 @@ impl TransactionsService {
             let mut processed_positions: HashSet<String> = HashSet::new();
 
             for closed_position_tx in &closed_position_transactions {
+                // extract the position address to get signatures from
                 let key_position_address = match &closed_position_tx.data {
                     TransactionData::ClosePosition(data) => {
                         // Use the to_close_position_data method
