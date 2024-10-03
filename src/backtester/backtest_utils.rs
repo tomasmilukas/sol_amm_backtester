@@ -272,6 +272,11 @@ mod tests {
             true,
         );
 
+        let (upper_tick_data, lower_tick_data) =
+        initial_liquidity_array.get_upper_and_lower_ticks(starting_tick, true).unwrap();
+        initial_liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data);
+        initial_liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data);
+
         let result_1 = sync_backwards(
             &mock_repo_1,
             initial_liquidity_array,

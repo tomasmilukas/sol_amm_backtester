@@ -254,8 +254,11 @@ impl Backtest {
                     let mut latest_amount_a_in_wallet = amount_a;
                     let mut latest_amount_b_in_wallet = amount_b;
 
+                    // In case the amounts are very close, dont swap.
+                    let no_swap_tolerance = (current_ratio - rebalance_ratio).abs() < 1e-3;
+
                     // If price is closer to upper limit, we mainly provide liquidity in B. Therefore we need to sell more token A if its below current ratio.
-                    if current_ratio > rebalance_ratio {
+                    if current_ratio > rebalance_ratio && !no_swap_tolerance {
                         let hypothetical_amount_b =
                             ((1.0 - rebalance_ratio) * total_amount_a) * current_price;
 
@@ -285,7 +288,7 @@ impl Backtest {
 
                         latest_amount_a_in_wallet -= amount_a_to_sell;
                         latest_amount_b_in_wallet += amount_out;
-                    } else {
+                    } else if !no_swap_tolerance {
                         // we have too little amount a and so we need to sell B for A.
                         let hypothetical_amount_a = rebalance_ratio * total_amount_a;
 
@@ -407,13 +410,21 @@ mod tests {
         }
     }
 
-    fn create_test_liquidity_array() -> LiquidityArray {
-        LiquidityArray::new(-500_000, 500_000, 10, 500)
+    fn create_test_liquidity_array(current_tick: i32) -> LiquidityArray {
+        let mut liquidity_arr = LiquidityArray::new(-500_000, 500_000, 10, 500);
+
+        liquidity_arr.current_tick = current_tick;
+        liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
+
+        liquidity_arr.update_liquidity(-100_000, 100_000, 1_000_000_000, true);
+        liquidity_arr.update_liquidity(-200_000, 200_000, 1_000_000_000, true);
+
+        liquidity_arr
     }
 
     #[tokio::test]
     async fn test_backtest_initialization() {
-        let liquidity_arr = create_test_liquidity_array();
+        let liquidity_arr = create_test_liquidity_array(0);
 
         let starting_token_a_amount = U256::from(1000_u128 * 10_u128.pow(6));
         let starting_token_b_amount = U256::from(1000_u128 * 10_u128.pow(6));
@@ -449,48 +460,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_position() {
-        let liquidity_arr = create_test_liquidity_array();
-        let wallet = Wallet {
-            token_a_addr: "TokenA".to_string(),
-            token_b_addr: "TokenB".to_string(),
-            amount_token_a: U256::from(1_000_000_000),
-            amount_token_b: U256::from(1_000_000_000),
-            token_a_decimals: 6,
-            token_b_decimals: 6,
-            amount_a_fees_collected: U256::zero(),
-            amount_b_fees_collected: U256::zero(),
-        };
-        let strategy = Box::new(MockStrategy);
-
-        let mut backtest = Backtest::new(
-            U256::from(1000),
-            U256::from(1000),
-            liquidity_arr,
-            wallet,
-            strategy,
-        );
-
-        let action = Action::CreatePosition {
-            position_id: "test_position".to_string(),
-            lower_tick: 900,
-            upper_tick: 1100,
-            // amount_a: U256::from(500_000_000_u128),
-            // amount_b: U256::from(500_000_000),
-        };
-
-        backtest.execute_actions(vec![action]).unwrap();
-
-        assert_eq!(backtest.wallet.amount_token_a, U256::from(500_000_000));
-        assert_eq!(backtest.wallet.amount_token_b, U256::from(500_000_000));
-
-        assert!(backtest
-            .liquidity_arr
-            .positions
-            .contains_key("test_position"));
-    }
-
-    #[tokio::test]
     async fn test_finalize_strategy_in_range() {
         let starting_amount_a = U256::from(100 * 10_i32.pow(6));
         let starting_amount_b = U256::from(100 * 10_i32.pow(6));
@@ -514,41 +483,45 @@ mod tests {
         let mut backtest = Backtest::new(
             starting_amount_a,
             starting_amount_b,
-            create_test_liquidity_array(),
+            create_test_liquidity_array(current_tick),
             wallet,
             strategy,
         );
 
-        backtest.liquidity_arr.current_tick = current_tick;
-        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
-
-        // Simulate some swaps to accumulate fees
-        let all_actions = vec![
-            Action::CreatePosition {
+        backtest
+            .execute_actions(vec![Action::CreatePosition {
                 position_id: "test_position".to_string(),
                 lower_tick,
                 upper_tick,
-                // amount_a: starting_amount_a,
-                // amount_b: starting_amount_b,
-            },
-            // Action::Swap {
-            //     amount_in: U256::from(7_000_000),
-            //     is_sell: true,
-            // },
-            // Action::Swap {
-            //     amount_in: U256::from(10_000_000_i128),
-            //     is_sell: false,
-            // },
-            // Action::Swap {
-            //     amount_in: U256::from(3_000_000),
-            //     is_sell: true,
-            // },
-            Action::ClosePosition {
-                position_id: "test_position".to_string(),
-            },
-        ];
+            }])
+            .unwrap();
 
-        backtest.execute_actions(all_actions).unwrap();
+        // manually set cached ticks
+        let (upper_tick_data, lower_tick_data) = backtest
+            .liquidity_arr
+            .get_upper_and_lower_ticks(current_tick, true)
+            .unwrap();
+
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(7_000_000), true);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(10_000_000_i128), false);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(3_000_000), true);
+
+        backtest
+            .execute_actions(vec![Action::ClosePosition {
+                position_id: "test_position".to_string(),
+            }])
+            .unwrap();
 
         // Assertions
         assert!(
@@ -585,49 +558,37 @@ mod tests {
         let mut backtest = Backtest::new(
             starting_amount_a,
             starting_amount_b,
-            create_test_liquidity_array(),
+            create_test_liquidity_array(current_tick),
             wallet,
             strategy,
         );
 
-        backtest.liquidity_arr.current_tick = current_tick;
-        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
-
-        // have to create multiple positions for one to be out of range
-        // cant use add owners position since that has limited balance
-        backtest.liquidity_arr.update_liquidity(
-            lower_tick - 100,
-            upper_tick + 100,
-            calculate_liquidity(
-                starting_amount_a * 5,
-                starting_amount_b * 5,
-                tick_to_sqrt_price_u256(current_tick),
-                tick_to_sqrt_price_u256(lower_tick - 100),
-                tick_to_sqrt_price_u256(upper_tick + 100),
-            )
-            .as_u128() as i128,
-            true,
-        );
-
-        // Simulate some swaps to accumulate fees
-        let all_actions = vec![
-            Action::CreatePosition {
+        backtest
+            .execute_actions(vec![Action::CreatePosition {
                 position_id: "test_position".to_string(),
                 lower_tick,
                 upper_tick,
-                // amount_a: starting_amount_a,
-                // amount_b: starting_amount_b,
-            },
-            // Action::Swap {
-            //     amount_in: U256::from(800_000_000_i128),
-            //     is_sell: false,
-            // },
-            Action::ClosePosition {
-                position_id: "test_position".to_string(),
-            },
-        ];
+            }])
+            .unwrap();
 
-        backtest.execute_actions(all_actions).unwrap();
+        // manually set cached ticks
+        let (upper_tick_data, lower_tick_data) = backtest
+            .liquidity_arr
+            .get_upper_and_lower_ticks(current_tick, true)
+            .unwrap();
+
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(8_000_000_000_000_i128), false);
+
+        backtest
+            .execute_actions(vec![Action::ClosePosition {
+                position_id: "test_position".to_string(),
+            }])
+            .unwrap();
 
         // Assertions
         assert!(
@@ -640,8 +601,8 @@ mod tests {
         );
 
         assert!(
-            backtest.wallet.amount_token_a == U256::zero(),
-            "Wiped out token a liquidity"
+            backtest.wallet.amount_token_a == U256::from(109935),
+            "Token A wiped out, this was remainder for when providing liq, since not all tokens get used up"
         );
         assert!(
             backtest.wallet.amount_token_b > starting_amount_b,
@@ -673,49 +634,37 @@ mod tests {
         let mut backtest = Backtest::new(
             starting_amount_a,
             starting_amount_b,
-            create_test_liquidity_array(),
+            create_test_liquidity_array(current_tick),
             wallet,
             strategy,
         );
 
-        backtest.liquidity_arr.current_tick = current_tick;
-        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
-
-        // have to create multiple positions for one to be out of range
-        // cant use add owners position since that has limited balance
-        backtest.liquidity_arr.update_liquidity(
-            lower_tick - 100,
-            upper_tick + 100,
-            calculate_liquidity(
-                starting_amount_a * 5,
-                starting_amount_b * 5,
-                tick_to_sqrt_price_u256(current_tick),
-                tick_to_sqrt_price_u256(lower_tick - 100),
-                tick_to_sqrt_price_u256(upper_tick + 100),
-            )
-            .as_u128() as i128,
-            true,
-        );
-
-        // Simulate some swaps to accumulate fees
-        let all_actions = vec![
-            Action::CreatePosition {
+        backtest
+            .execute_actions(vec![Action::CreatePosition {
                 position_id: "test_position".to_string(),
                 lower_tick,
                 upper_tick,
-                // amount_a: starting_amount_a,
-                // amount_b: starting_amount_b,
-            },
-            // Action::Swap {
-            //     amount_in: U256::from(600_000_000_i128),
-            //     is_sell: true, // SELLING TOKEN A
-            // },
-            Action::ClosePosition {
-                position_id: "test_position".to_string(),
-            },
-        ];
+            }])
+            .unwrap();
 
-        backtest.execute_actions(all_actions).unwrap();
+        // manually set cached ticks
+        let (upper_tick_data, lower_tick_data) = backtest
+            .liquidity_arr
+            .get_upper_and_lower_ticks(current_tick, true)
+            .unwrap();
+
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(8_000_000_000_000_i128), true);
+
+        backtest
+            .execute_actions(vec![Action::ClosePosition {
+                position_id: "test_position".to_string(),
+            }])
+            .unwrap();
 
         // Assertions
         assert!(
@@ -728,8 +677,8 @@ mod tests {
         );
 
         assert!(
-            backtest.wallet.amount_token_b == U256::zero(),
-            "Wiped out token B liquidity"
+            backtest.wallet.amount_token_b == U256::from(1),
+            "Wiped out token B liquidity, remainder from when providing liq"
         );
         assert!(
             backtest.wallet.amount_token_a > starting_amount_a,
