@@ -354,14 +354,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         "  Profits LPing in pct:              {}%",
         format!("{:.3}", result.lping_profits_pct).red()
     );
-    println!(
-        "  Profits pct from price accruals:   {}%",
-        format!(
-            "{:.3}",
-            result.lping_profits_pct - result.capital_earned_in_token_a_in_pct
-        )
-        .red()
-    );
 
     Ok(())
 }

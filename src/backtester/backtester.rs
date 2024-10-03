@@ -7,7 +7,7 @@ use crate::{
         core_math::{
             calculate_amounts, calculate_liquidity, calculate_liquidity_a, calculate_liquidity_b,
             calculate_token_a_from_liquidity, calculate_token_b_from_liquidity,
-            tick_to_sqrt_price_u256, Q128, U256,
+            tick_to_sqrt_price_u256, Q128, Q64, U256,
         },
         error::{BacktestError, SyncError},
     },
@@ -240,46 +240,83 @@ impl Backtest {
                     let amount_a = self.wallet.amount_token_a;
                     let amount_b = self.wallet.amount_token_b;
 
+                    let current_tick = self.liquidity_arr.current_tick;
                     let upper_sqrt_price = tick_to_sqrt_price_u256(upper_tick);
                     let lower_sqrt_price = tick_to_sqrt_price_u256(lower_tick);
                     let curr_sqrt_price = self.liquidity_arr.current_sqrt_price;
 
-                    println!("CURRENT TICK: {}", self.liquidity_arr.current_tick);
+                    println!("CURRENT TICK: {}", current_tick);
 
                     // Since the tick might be anywhere in between lower and upper provided ticks from env, we need to rebalance.
                     // The ratio nmr represents how much % of assets should be in token_a. If ratio is 0.3, then 30% should be in token a. Since token a is on upper side of liquidity.
-                    let rebalance_ratio = ((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
-                        / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64);
 
-                    let current_price = (curr_sqrt_price * curr_sqrt_price) / Q128;
-                    let total_amount_a = (amount_a + amount_b / current_price).as_u128() as f64;
+                    println!(
+                        "PRICES: {} {} {}",
+                        upper_sqrt_price, curr_sqrt_price, lower_sqrt_price
+                    );
+
+                    println!("TICKS: {} {} {}", upper_tick, current_tick, lower_tick);
+
+                    let rebalance_ratio = if current_tick >= upper_tick {
+                        // All liquidity is in token B.
+                        0.0
+                    } else if current_tick <= lower_tick {
+                        // All liquidity is in token A.
+                        1.0
+                    } else {
+                        ((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
+                            / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64)
+                    };
+                    println!("PASSED THIS?");
+
+                    // No need to use decimals since when using raw token amounts as below it sorts itself out.
+                    let current_price =
+                        (curr_sqrt_price.as_u128() as f64 / Q64.as_u128() as f64).powf(2.0);
+
+                    println!(
+                        "PRICE: {} {} {} {}",
+                        current_price,
+                        curr_sqrt_price * curr_sqrt_price,
+                        Q128,
+                        Q128 / (curr_sqrt_price * curr_sqrt_price)
+                    );
+
+                    let total_amount_a =
+                        amount_a.as_u128() as f64 + amount_b.as_u128() as f64 / current_price;
                     let current_ratio = amount_a.as_u128() as f64 / total_amount_a;
 
                     println!("RATIOS: {} {}", rebalance_ratio, current_ratio);
                     println!("TOTAL AMOUNT A: {}", total_amount_a);
-                    println!("TOTAL AMOUNT B: {}", amount_a * current_price + amount_b);
+                    // println!("TOTAL AMOUNT B: {}", amount_a * current_price + amount_b);
 
                     let mut latest_amount_a_in_wallet = amount_a;
                     let mut latest_amount_b_in_wallet = amount_b;
 
-                    // If price is closer to upper limit, we mainly provide liquidity in B. Therefore we need to sell more token A if its below current ratio (representing b).
+                    // If price is closer to upper limit, we mainly provide liquidity in B. Therefore we need to sell more token A if its below current ratio.
                     if current_ratio > rebalance_ratio {
-                        let hypothetical_amount_b = ((1.0 - rebalance_ratio) * total_amount_a)
-                            * current_price.as_u128() as f64;
+                        let hypothetical_amount_b =
+                            ((1.0 - rebalance_ratio) * total_amount_a) * current_price;
 
-                        let liquidity_b = calculate_liquidity_b(
-                            U256::from(hypothetical_amount_b as u128),
-                            lower_sqrt_price,
-                            curr_sqrt_price,
-                        );
+                        let amount_a_needed_for_liquidity = if rebalance_ratio == 0.0 {
+                            // Manual amount_a set to avoid overflow errors
+                            // aka sell all amount a
+                            U256::zero()
+                        } else {
+                            let liquidity_b = calculate_liquidity_b(
+                                U256::from(hypothetical_amount_b as u128),
+                                lower_sqrt_price,
+                                curr_sqrt_price,
+                            );
 
-                        let amount_a_needed = calculate_token_a_from_liquidity(
-                            liquidity_b,
-                            curr_sqrt_price,
-                            upper_sqrt_price,
-                        );
+                            calculate_token_a_from_liquidity(
+                                liquidity_b,
+                                curr_sqrt_price,
+                                upper_sqrt_price,
+                            )
+                        };
 
-                        let amount_a_to_sell = amount_a - amount_a_needed;
+                        // sell whats unnecessary for liquidity
+                        let amount_a_to_sell = amount_a - amount_a_needed_for_liquidity;
 
                         let amount_out =
                             self.liquidity_arr.simulate_swap(amount_a_to_sell, true)?;
@@ -287,30 +324,45 @@ impl Backtest {
                         latest_amount_a_in_wallet -= amount_a_to_sell;
                         latest_amount_b_in_wallet += amount_out;
                     } else {
-                        // we need less amount_a than current ratio of assets has. aka buy some amount_a
+                        // we have too little amount a and so we need to sell B for A.
                         let hypothetical_amount_a = rebalance_ratio * total_amount_a;
 
-                        let liquidity_a = calculate_liquidity_a(
-                            U256::from(hypothetical_amount_a as u128),
-                            curr_sqrt_price,
-                            upper_sqrt_price,
-                        );
+                        let amount_b_needed_for_liq = if rebalance_ratio == 1.0 {
+                            // Manual amount_a set to avoid overflow errors
+                            // aka sell all amount b
+                            U256::zero()
+                        } else {
+                            let liquidity_a = calculate_liquidity_a(
+                                U256::from(hypothetical_amount_a as u128),
+                                curr_sqrt_price,
+                                upper_sqrt_price,
+                            );
+                            println!("LIQ PASSED? 0");
 
-                        let amount_b_needed = calculate_token_b_from_liquidity(
-                            liquidity_a,
-                            curr_sqrt_price,
-                            lower_sqrt_price,
-                        );
+                            calculate_token_b_from_liquidity(
+                                liquidity_a,
+                                curr_sqrt_price,
+                                lower_sqrt_price,
+                            )
+                        };
+                        println!("LIQ PASSED? 1 {} {}", amount_b, amount_b_needed_for_liq);
 
-                        let amount_a_to_buy =
-                            ((amount_b_needed + amount_b) / current_price) - amount_a;
+                        let amount_b_to_sell = amount_b - amount_b_needed_for_liq;
+                        println!("AMOUNT PASSED? 2");
 
                         let amount_out =
-                            self.liquidity_arr.simulate_swap(amount_a_to_buy, false)?;
+                            self.liquidity_arr.simulate_swap(amount_b_to_sell, false)?;
+                        println!("AMOUNT PASSED? 3");
 
-                        latest_amount_a_in_wallet += amount_a_to_buy;
-                        latest_amount_b_in_wallet -= amount_out;
+                        latest_amount_a_in_wallet += amount_out;
+                        latest_amount_b_in_wallet -= amount_b_to_sell;
+                        println!("WALLET UPDATES? 4");
                     }
+
+                    println!(
+                        "WALLET AMOUNTS: {} {}",
+                        latest_amount_a_in_wallet, latest_amount_b_in_wallet
+                    );
 
                     let newest_liquidity = calculate_liquidity(
                         latest_amount_a_in_wallet,
@@ -319,6 +371,8 @@ impl Backtest {
                         lower_sqrt_price,
                         upper_sqrt_price,
                     );
+
+                    println!("NEW LIQ: {}", newest_liquidity);
 
                     let (amount_a_provided_to_pool, amount_b_provided_to_pool) = calculate_amounts(
                         newest_liquidity,

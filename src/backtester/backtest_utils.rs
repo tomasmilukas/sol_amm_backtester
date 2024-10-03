@@ -147,10 +147,10 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                     ) {
                         (Some(lower), Some(upper), Ok(amount)) => (lower, upper, amount),
                         _ => {
-                            eprintln!(
-                                "Liquidity transaction missing tick data, skipping: {}",
-                                transaction.signature
-                            );
+                            // eprintln!(
+                            //     "Liquidity transaction missing tick data, skipping: {}",
+                            //     transaction.signature
+                            // );
                             continue;
                         }
                     };
