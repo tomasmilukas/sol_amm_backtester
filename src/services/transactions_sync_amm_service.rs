@@ -108,11 +108,14 @@ pub trait AMMService: Send + Sync {
             .fetch_lowest_block_time_transaction(pool_address)
             .await?;
 
+        let time_range = Utc::now() - start_time;
+
         match lowest_block_tx {
             Some(tx) => {
                 self.fetch_and_insert_transactions(
                     pool_address,
-                    start_time,
+                    // sync from oldest_tx up until we reach end of time range
+                    tx.transform_to_tx_model().block_time_utc - time_range,
                     Some(tx.transform_to_tx_model()),
                 )
                 .await

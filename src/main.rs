@@ -18,7 +18,10 @@ use crate::{
 };
 
 use anyhow::{Context, Result};
-use api::{positions_api::PositionsApi, transactions_api::TransactionApi};
+use api::{
+    positions_api::PositionsApi, price_api::PriceApi, token_metadata_api::TokenMetadataApi,
+    transactions_api::TransactionApi,
+};
 use backtester::{
     backtest_utils::{create_full_liquidity_range, sync_backwards},
     backtester::{Backtest, Strategy, Wallet},
@@ -28,18 +31,17 @@ use backtester::{
 
 use chrono::{Duration, Utc};
 use config::{AppConfig, StrategyType};
+
+use colored::*;
 use dotenv::dotenv;
-use repositories::{
-    positions_repo::PositionsRepo,
-    transactions_repo::{TransactionRepo, TransactionRepoTrait},
-};
+use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use services::{
     positions_service::PositionsService, transactions_service::TransactionsService,
     transactions_sync_amm_service::create_amm_service,
 };
 use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc};
-use utils::{error::SyncError, price_calcs::U256};
+use utils::{core_math::U256, profit_calcs::calculate_prices_and_pnl};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -189,31 +191,27 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
 
     let tx_repo = TransactionRepo::new(pool);
 
-    let latest_transaction = tx_repo
-        .fetch_highest_tx_swap(&pool_data.address)
-        .await
-        .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
-
     let (positions_data, tx_to_sync_from) = positions_service
-        .get_live_position_data_for_transaction(
-            tx_repo.clone(),
-            &config.pool_address,
-            latest_transaction.clone().unwrap(),
-        )
+        .get_live_position_data_for_transaction(tx_repo.clone(), &config.pool_address)
         .await?;
 
     // Create the liquidity range "at present" from db.
-    let liquidity_range_arr =
-        create_full_liquidity_range(pool_data.tick_spacing, positions_data, pool_data.fee_rate)?;
+    let liquidity_range_arr = create_full_liquidity_range(
+        pool_data.tick_spacing,
+        positions_data,
+        pool_data.clone(),
+        tx_to_sync_from.clone(),
+        pool_data.fee_rate,
+    )?;
 
     println!("Current liquidity range recreated! Time to sync it backwards for the backtester.");
 
     // Sync it backwards using all transactions to get the original liquidity range that we start our backtest from.
-    let (original_starting_liquidity_arr, lowest_tx_id) = sync_backwards(
+    let (original_starting_liquidity_arr, highest_tx) = sync_backwards(
         &tx_repo,
         liquidity_range_arr,
         pool_data.clone(),
-        tx_to_sync_from,
+        tx_to_sync_from.clone(),
         10_000,
     )
     .await?;
@@ -237,8 +235,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         token_b_decimals: pool_data.token_b_decimals,
         amount_a_fees_collected: U256::zero(),
         amount_b_fees_collected: U256::zero(),
-        total_profit: 0.0,
-        total_profit_pct: 0.0,
     };
 
     let strategy: Box<dyn Strategy> = match config.strategy {
@@ -256,8 +252,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         }
     };
 
-    strategy.initialize_strategy(amount_token_a, amount_token_b);
-
     let mut backtest = Backtest::new(
         amount_token_a,
         amount_token_b,
@@ -269,17 +263,96 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     backtest
         .sync_forward(
             &tx_repo,
-            lowest_tx_id,
-            latest_transaction.unwrap().tx_id,
+            highest_tx.tx_id, // the higher, the more in the past it is.
+            tx_to_sync_from.tx_id,
             &config.pool_address,
             10_000,
         )
         .await
         .unwrap();
 
+    let token_metadata_api = TokenMetadataApi::new()?;
+    let price_api = PriceApi::new()?;
+
+    let result = calculate_prices_and_pnl(
+        &token_metadata_api,
+        &price_api,
+        &backtest,
+        &highest_tx,
+        &tx_to_sync_from,
+    )
+    .await
+    .unwrap();
+
+    println!("\n{}", "Strategy Results".bold().underline());
+    println!("{}", "=================".bold());
+
+    println!("\n{}", "Timespan of strategy".underline());
+    println!("  From:        {}", result.start_time);
+    println!("  To:          {}", result.end_time);
+
+    println!("\n{}", "Price Changes".underline());
     println!(
-        "BACTESTING DONE! THIS IS YOUR TOTAL PROFIT {} AND PROFIT PCT {}",
-        backtest.wallet.total_profit, backtest.wallet.total_profit
+        "  Token A price change (vs USD):     {}%",
+        format!("{:.3}", result.token_a_price_change_pct).yellow()
+    );
+    println!(
+        "  Token B price change (vs USD):     {}%",
+        format!("{:.3}", result.token_b_price_change_pct).yellow()
+    );
+
+    println!("\n{}", "Holding Analysis".underline());
+    println!(
+        "  PnL if held (no LPing):           ${}",
+        format!("{:.3}", result.pnl_no_lping).blue()
+    );
+    println!(
+        "  PnL if held pct (no LPing):        {}%",
+        format!("{:.3}", result.pnl_no_lping_pct).blue()
+    );
+
+    println!("\n{}", "Total Value Analysis".underline());
+    println!(
+        "  Starting value in USD:            ${:.3}",
+        result.starting_total_value_in_usd
+    );
+    println!(
+        "  Ending value in USD:              ${:.3}",
+        result.ending_total_value_in_usd
+    );
+    println!(
+        "  Total PnL in USD:                 ${}",
+        format!("{:.3}", result.final_value_total).green()
+    );
+    println!(
+        "  Total PnL in pct:                  {}%",
+        format!("{:.3}", result.total_pnl_pct).green()
+    );
+
+    println!("\n{}", "LPing analysis".underline());
+    println!(
+        "  Tokens A earned:                   {:.6}",
+        result.token_a_collected_fees
+    );
+    println!(
+        "  Tokens B earned:                   {:.6}",
+        result.token_b_collected_fees
+    );
+    println!(
+        "  Capital earned (in token A):       {:.6}",
+        result.capital_earned_in_token_a
+    );
+    println!(
+        "  Capital earned in pct:             {}%",
+        format!("{:.3}", result.capital_earned_in_token_a_in_pct).red()
+    );
+    println!(
+        "  Profits LPing in USD:             ${}",
+        format!("{:.3}", result.total_fees_collected_in_usd).red()
+    );
+    println!(
+        "  Profits LPing in pct:              {}%",
+        format!("{:.3}", result.lping_profits_pct).red()
     );
 
     Ok(())

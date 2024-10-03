@@ -29,35 +29,65 @@ pub fn calculate_liquidity(
     upper_sqrt_price: U256,
 ) -> U256 {
     if current_sqrt_price <= lower_sqrt_price {
-        // All liquidity is in token A
-        amount_a
-            .checked_mul(lower_sqrt_price)
-            .and_then(|v| v.checked_mul(upper_sqrt_price))
-            .and_then(|v| v.checked_div(Q64))
-            .and_then(|v| v.checked_div(upper_sqrt_price.checked_sub(lower_sqrt_price)?))
-            .unwrap()
+        calculate_liquidity_a(amount_a, lower_sqrt_price, upper_sqrt_price)
     } else if current_sqrt_price >= upper_sqrt_price {
-        // All liquidity is in token B
-        amount_b
-            .checked_mul(Q64)
-            .and_then(|v| v.checked_div(upper_sqrt_price.checked_sub(lower_sqrt_price)?))
-            .unwrap()
+        calculate_liquidity_b(amount_b, lower_sqrt_price, upper_sqrt_price)
     } else {
-        // Price is within the range
-        let l_a = amount_a
-            .checked_mul(Q64)
-            .and_then(|v| v.checked_div(upper_sqrt_price.checked_sub(current_sqrt_price)?))
-            .and_then(|v| v.checked_mul(current_sqrt_price))
-            .and_then(|v| v.checked_div(Q64))
-            .unwrap();
-
-        let l_b = amount_b
-            .checked_mul(Q64)
-            .and_then(|v| v.checked_div(current_sqrt_price.checked_sub(lower_sqrt_price)?))
-            .unwrap();
-
+        let l_a = calculate_liquidity_a(amount_a, current_sqrt_price, upper_sqrt_price);
+        let l_b = calculate_liquidity_b(amount_b, lower_sqrt_price, current_sqrt_price);
         l_a.min(l_b)
     }
+}
+
+pub fn calculate_liquidity_a(amount: U256, lower_sqrt_price: U256, upper_sqrt_price: U256) -> U256 {
+    amount
+        .checked_mul(lower_sqrt_price)
+        .and_then(|v| v.checked_mul(upper_sqrt_price))
+        .and_then(|v| v.checked_div(Q64))
+        .and_then(|v| v.checked_div(upper_sqrt_price.checked_sub(lower_sqrt_price)?))
+        .unwrap()
+}
+
+pub fn calculate_liquidity_b(amount: U256, lower_sqrt_price: U256, upper_sqrt_price: U256) -> U256 {
+    amount
+        .checked_mul(Q64)
+        .and_then(|v| v.checked_div(upper_sqrt_price.checked_sub(lower_sqrt_price)?))
+        .unwrap()
+}
+
+pub fn calculate_token_a_from_liquidity(
+    liquidity: U256,
+    sqrt_price_current: U256,
+    sqrt_price_upper: U256,
+) -> U256 {
+    // Calculate (sqrt_price_upper - sqrt_price_current) * Q128 / (sqrt_price_current * sqrt_price_upper)
+    let numerator = sqrt_price_upper
+        .checked_sub(sqrt_price_current)
+        .unwrap()
+        .checked_mul(Q128)
+        .unwrap();
+
+    let denominator = sqrt_price_current.checked_mul(sqrt_price_upper).unwrap();
+
+    let inverse_diff = numerator.checked_div(denominator).unwrap();
+
+    // Multiply by liquidity and divide by Q64 to adjust for fixed-point representation
+    liquidity
+        .checked_mul(inverse_diff)
+        .unwrap()
+        .checked_div(Q64)
+        .unwrap()
+}
+
+pub fn calculate_token_b_from_liquidity(
+    liquidity: U256,
+    sqrt_price_current: U256,
+    sqrt_price_lower: U256,
+) -> U256 {
+    liquidity
+        .checked_mul(sqrt_price_current.checked_sub(sqrt_price_lower).unwrap())
+        .and_then(|v| v.checked_div(Q64))
+        .unwrap()
 }
 
 // THIS FUNCTION WORKS. TESTED AGAINST LIVE POSITIONS.
@@ -96,74 +126,30 @@ pub fn calculate_amounts(
 pub fn calculate_new_sqrt_price(
     current_sqrt_price: U256,
     liquidity: U256,
-    amount_in: U256,
+    amount_in: U256, // Δx
     is_sell: bool,
 ) -> U256 {
-    // Formula explanations for later in case need to edit:
-    // x = L / sqrt(P) also y = L * sqrt(P)
     if is_sell {
-        /*
-        for this case:
-        (x + Δx) * y = L^2
-
-        (L/sqrt(P) + Δx) * (L*sqrt(P)) = L^2
-        L^2 + Δx*L*srt(P)q = L^2
-        Δx*L*sqrt(P) = L^2 - L^2 = 0
-
-        After price change we must satisfy: (L/sqrt(P_new)) * (L*sqrt(P_new)) = L^2.
-        Hence, L/sqrt(P_new) = L/sqrt(P) + Δx. sqrt(P_new) = L / (L/sqrt(P) + Δx).
-
-        sqrt(P_new) = (L * sqrt(P)) / (L + Δx * sqrt(P))
-        */
-        let numerator = current_sqrt_price.checked_mul(liquidity).unwrap();
-        let product = amount_in.checked_mul(current_sqrt_price).unwrap();
+        // sqrtP_new = (L * sqrtP_current) / (L + Δx * sqrtP_current)
+        let numerator = liquidity.checked_mul(current_sqrt_price).unwrap();
         let denominator = liquidity
-            .checked_add(product.checked_div(Q64).unwrap())
+            .checked_add(
+                amount_in
+                    .checked_mul(current_sqrt_price)
+                    .unwrap()
+                    .checked_div(Q64)
+                    .unwrap(),
+            )
             .unwrap();
         numerator.checked_div(denominator).unwrap()
     } else {
-        /*
-        for this case:
-        x * (y + Δy) = L^2
-
-        (L/sqrt(P)) * (L*sqrt(P) + Δy) = L^2
-        L^2 + L*Δy = L^2
-        L*Δy = L^2 - L^2 = 0
-
-        After price change we must satisfy: (L/sqrt(P_new)) * (L*sqrt(P_new)) = L^2.
-        Hence, L*sqrt(P_new) = L*sqrt(P) + Δy. sqrt(P_new) = sqrt(P) + (Δy / L).
-
-        sqrt(P_new) = sqrt(P) + (Δy / L)
-        */
-        let increment = amount_in
+        // sqrtP_new = sqrtP_current + (Δy * Q64) / L
+        let delta = amount_in
             .checked_mul(Q64)
             .unwrap()
             .checked_div(liquidity)
             .unwrap();
-        current_sqrt_price.checked_add(increment).unwrap()
-    }
-}
-
-pub fn calculate_rebalance_amount(
-    amount_a: U256,
-    amount_b: U256,
-    current_sqrt_price: U256,
-    rebalance_ratio: U256, // Use U256 for ratio, where 1.0 = Q64
-) -> (U256, bool) {
-    // Calculate total value in terms of token A. We multiply amount_b by Q32 (even tho its scaled alrdy) to unscale the sqrt price.
-    let total_value_a = amount_a + (amount_b * Q64 / current_sqrt_price);
-
-    // Calculate target amount of token A
-    let target_amount_a = total_value_a * rebalance_ratio / Q64;
-
-    if amount_a > target_amount_a {
-        // Need to sell token A
-        (amount_a - target_amount_a, true)
-    } else {
-        // Need to sell token B
-        let target_amount_b =
-            (total_value_a * (Q64 - rebalance_ratio) / Q64) * current_sqrt_price / Q64;
-        (amount_b - target_amount_b, false)
+        current_sqrt_price.checked_add(delta).unwrap()
     }
 }
 
@@ -330,97 +316,6 @@ mod tests {
             calculate_relative_error(U256::from(101503310_u128), amount_b),
             1e-5
         );
-    }
-
-    #[test]
-    fn test_calculate_rebalance_amount() {
-        // Test case: Need to sell token A
-        {
-            let amount_a = U256::from(1500);
-            let amount_b = U256::from(500);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token A");
-            assert_eq!(is_sell_a, true, "Should sell token A");
-            assert!(
-                amount_to_sell <= U256::from(500),
-                "Should not sell more than the imbalance"
-            );
-        }
-
-        // Test case: Need to sell token B
-        {
-            let amount_a = U256::from(500);
-            let amount_b = U256::from(1500);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token B");
-            assert_eq!(is_sell_a, false, "Should sell token B");
-            assert!(
-                amount_to_sell <= U256::from(500),
-                "Should not sell more than the imbalance"
-            );
-        }
-
-        // Test case 4: Rebalance to 60/40
-        {
-            let amount_a = U256::from(1000);
-            let amount_b = U256::from(1000);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = U256::from(6) * Q64 / 10; // 60%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token B");
-            assert_eq!(is_sell_a, false, "Should sell token B");
-            assert!(
-                amount_to_sell <= U256::from(200),
-                "Should sell approximately 10% of token B"
-            );
-        }
-
-        // Test case: Edge case - all token A
-        {
-            let amount_a = U256::from(1000);
-            let amount_b = U256::zero();
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token A");
-            assert!(
-                amount_to_sell <= U256::from(500),
-                "Should sell approximately half of token A"
-            );
-        }
-
-        // Test case: Edge case - all token B
-        {
-            let amount_a = U256::zero();
-            let amount_b = U256::from(1000);
-            let current_sqrt_price = sqrt_price_to_u256(1.0);
-            let rebalance_ratio = Q64 / 2; // 50%
-
-            let (amount_to_sell, is_sell_a) =
-                calculate_rebalance_amount(amount_a, amount_b, current_sqrt_price, rebalance_ratio);
-
-            assert!(amount_to_sell > U256::zero(), "Should sell some token B");
-            assert!(
-                amount_to_sell <= U256::from(500) * Q64,
-                "Should sell approximately half of token B"
-            );
-        }
     }
 
     #[test]

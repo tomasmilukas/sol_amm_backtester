@@ -7,8 +7,8 @@ use crate::{
     },
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
+        core_math::{price_to_tick, tick_to_sqrt_price_u256, U256},
         error::SyncError,
-        price_calcs::{price_to_tick, tick_to_sqrt_price_u256, U256},
     },
 };
 
@@ -17,6 +17,8 @@ use super::liquidity_array::LiquidityArray;
 pub fn create_full_liquidity_range(
     tick_spacing: i16,
     positions: Vec<LivePositionModel>,
+    pool_model: PoolModel,
+    latest_transaction: TransactionModelFromDB,
     fee_rate: i16,
 ) -> Result<LiquidityArray> {
     let min_tick = -500_000;
@@ -25,32 +27,7 @@ pub fn create_full_liquidity_range(
     let mut liquidity_array =
         LiquidityArray::new(min_tick, max_tick, tick_spacing as i32, fee_rate);
 
-    for position in positions {
-        // default true since we are adding all positions.
-        liquidity_array.update_liquidity(
-            position.tick_lower,
-            position.tick_upper,
-            position.liquidity as i128,
-            true,
-        );
-    }
-
-    Ok(liquidity_array)
-}
-
-pub async fn sync_backwards<T: TransactionRepoTrait>(
-    transaction_repo: &T,
-    mut liquidity_array: LiquidityArray,
-    pool_model: PoolModel,
-    latest_transaction: TransactionModelFromDB,
-    batch_size: i64,
-) -> Result<(LiquidityArray, i64), SyncError> {
-    // Initialize the cursor with the latest tx_id
-    let mut cursor = Some(latest_transaction.tx_id);
-
-    // Initialize lowest_tx_id with the maximum possible i64 value
-    let mut lowest_tx_id = i64::MAX;
-
+    // set price to correctly calculate active liquidity inside update_liquidity
     let swap_data = latest_transaction
         .data
         .to_swap_data()
@@ -59,6 +36,7 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
 
     let is_sell = swap_data.token_in == pool_model.token_a_address;
 
+    // Set essential info before simulation.
     if is_sell {
         let tick = price_to_tick(swap_data.amount_out as f64 / swap_data.amount_in as f64);
 
@@ -71,13 +49,46 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
         liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     };
 
+    for position in positions {
+        // default true since we are adding all positions.
+        liquidity_array.update_liquidity(
+            position.tick_lower,
+            position.tick_upper,
+            position.liquidity as i128,
+            true,
+        );
+    }
+
+    // AFTER the whole liquidity distribution range is set up, we can set the essential caches.
+    let (upper_tick_data, lower_tick_data) =
+        liquidity_array.get_upper_and_lower_ticks(liquidity_array.current_tick, is_sell)?;
+
+    liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data);
+    liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data);
+
+    Ok(liquidity_array)
+}
+
+pub async fn sync_backwards<T: TransactionRepoTrait>(
+    transaction_repo: &T,
+    mut liquidity_array: LiquidityArray,
+    pool_model: PoolModel,
+    latest_transaction: TransactionModelFromDB,
+    batch_size: i64,
+) -> Result<(LiquidityArray, TransactionModelFromDB), SyncError> {
+    // Initialize the cursor with the latest tx_id
+    let mut cursor = Some(latest_transaction.tx_id);
+
+    // Initialize highest_tx_id with the latest transaction ID. The latest txs are the first ones being inserted, so its a low nmr. Then we ascend to the past.
+    let mut highest_tx = latest_transaction;
+
     loop {
         let transactions = transaction_repo
             .fetch_transactions(
                 &pool_model.address,
                 cursor,
                 batch_size,
-                OrderDirection::Descending,
+                OrderDirection::Ascending,
             )
             .await
             .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
@@ -86,8 +97,8 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
             break;
         }
 
-        // As we are syncing backwards, everything needs to be the opposite. Increase liquidity = remove and so on. Sell swap is a buy swap with reverse amount_in and amount_out.
-        for transaction in transactions.iter().rev() {
+        // Process transactions in order (oldest to newest)
+        for transaction in transactions.iter() {
             match transaction.transaction_type.as_str() {
                 "IncreaseLiquidity" | "DecreaseLiquidity" => {
                     let liquidity_data = transaction
@@ -95,13 +106,28 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .to_liquidity_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                    // reverse
+                    // Reverse the operation for backwards sync
                     let is_increase = transaction.transaction_type.as_str() != "IncreaseLiquidity";
 
+                    let (tick_lower, tick_upper, liquidity_amount) = match (
+                        liquidity_data.tick_lower,
+                        liquidity_data.tick_upper,
+                        liquidity_data.liquidity_amount.parse::<i128>(),
+                    ) {
+                        (Some(lower), Some(upper), Ok(amount)) => (lower, upper, amount),
+                        _ => {
+                            // eprintln!(
+                            //     "Liquidity transaction missing tick data, skipping: {}",
+                            //     transaction.signature
+                            // );
+                            continue;
+                        }
+                    };
+
                     liquidity_array.update_liquidity(
-                        liquidity_data.tick_lower.unwrap(),
-                        liquidity_data.tick_upper.unwrap(),
-                        liquidity_data.liquidity_amount.parse::<i128>().unwrap(),
+                        tick_lower,
+                        tick_upper,
+                        liquidity_amount,
                         is_increase,
                     );
                 }
@@ -111,26 +137,30 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .to_swap_data()
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                    // flip the is_sell
-                    liquidity_array.simulate_swap(U256::from(swap_data.amount_in), !is_sell)?;
+                    let is_sell = swap_data.token_in == pool_model.token_a_address;
+
+                    // Flip the is_sell for backwards sync and always pass in amount_out since we reversing each tx.
+                    // For instance we have SOL -> POPCAT (aka sell) with amount_in being SOL. So now we are pasing POPCAT -> SOL and flip sell to buy. Both need reversion!
+                    liquidity_array.simulate_swap(U256::from(swap_data.amount_out), !is_sell)?;
                 }
                 _ => {}
             }
+
+            // Update highest_tx_id
+            if highest_tx.tx_id < transaction.tx_id {
+                highest_tx = transaction.clone();
+            }
         }
 
-        cursor = transactions.last().map(|t| t.tx_id);
+        // Update cursor for the next iteration
+        cursor = transactions.last().map(|t| t.tx_id + 1);
 
         if transactions.len() < batch_size as usize {
             break;
         }
     }
 
-    // If we didn't process any transactions, return the original cursor
-    if lowest_tx_id == i64::MAX {
-        lowest_tx_id = cursor.unwrap_or(i64::MAX);
-    }
-
-    Ok((liquidity_array, lowest_tx_id))
+    Ok((liquidity_array, highest_tx))
 }
 
 #[cfg(test)]
@@ -138,7 +168,7 @@ mod tests {
     use super::*;
     use crate::{
         models::transactions_model::{SwapData, TransactionData, TransactionModelFromDB},
-        utils::price_calcs::{calculate_liquidity, tick_to_sqrt_price_u256},
+        utils::core_math::{calculate_liquidity, tick_to_sqrt_price_u256},
     };
     use anyhow::Result;
     use async_trait::async_trait;
@@ -150,13 +180,6 @@ mod tests {
 
     #[async_trait]
     impl TransactionRepoTrait for MockTransactionRepo {
-        async fn fetch_highest_tx_swap(
-            &self,
-            _pool_address: &str,
-        ) -> Result<Option<TransactionModelFromDB>> {
-            Ok(self.transactions.last().cloned())
-        }
-
         async fn fetch_transactions(
             &self,
             _pool_address: &str,
@@ -248,6 +271,11 @@ mod tests {
             liquidity_2.as_u128() as i128,
             true,
         );
+
+        let (upper_tick_data, lower_tick_data) =
+        initial_liquidity_array.get_upper_and_lower_ticks(starting_tick, true).unwrap();
+        initial_liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data);
+        initial_liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data);
 
         let result_1 = sync_backwards(
             &mock_repo_1,
