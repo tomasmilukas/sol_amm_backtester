@@ -508,6 +508,12 @@ mod tests {
 
         // for test_get_upper_and_lower_tick
         array.update_liquidity(current_tick - 5, current_tick + 5, 20 as i128, true);
+
+        let (upper_tick_data, lower_tick_data) =
+            array.get_upper_and_lower_ticks(current_tick, true).unwrap();
+        array.cached_lower_initialized_tick = Some(lower_tick_data);
+        array.cached_upper_initialized_tick = Some(upper_tick_data);
+
         array
     }
 
@@ -636,7 +642,7 @@ mod tests {
         array.simulate_swap(swap_amount_a, true).unwrap();
 
         // Calculate expected fee
-        let total_fee = (swap_amount_a * U256::from(array.fee_rate)) / U256::from(10000);
+        let total_fee = (swap_amount_a * U256::from(array.fee_rate)) / U256::from(1_000_000);
         let expected_fee_a = total_fee.as_u128() as f64 * alice_liquidity_share;
 
         // Collect fees after first swap
@@ -662,7 +668,7 @@ mod tests {
         array.simulate_swap(swap_amount_b, false).unwrap();
 
         // Calculate expected fee for second swap
-        let total_fee_b = (swap_amount_b * U256::from(array.fee_rate)) / U256::from(10000);
+        let total_fee_b = (swap_amount_b * U256::from(array.fee_rate)) / U256::from(1_000_000);
         let expected_fee_b = total_fee_b.as_u128() as f64 * alice_liquidity_share;
 
         // Collect fees after second swap
