@@ -7,14 +7,10 @@ use crate::{
     },
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
-        error::SyncError,
         core_math::{price_to_tick, tick_to_sqrt_price_u256, U256},
+        error::SyncError,
     },
 };
-
-use serde_json::json;
-use std::fs::File;
-use std::io::Write;
 
 use super::liquidity_array::LiquidityArray;
 
@@ -44,13 +40,13 @@ pub fn create_full_liquidity_range(
     if is_sell {
         let tick = price_to_tick(swap_data.amount_out as f64 / swap_data.amount_in as f64);
 
-        liquidity_array.current_tick = 49838;
-        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(49838);
+        liquidity_array.current_tick = tick;
+        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     } else {
         let tick = price_to_tick(swap_data.amount_in as f64 / swap_data.amount_out as f64);
 
-        liquidity_array.current_tick = 49838;
-        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(49838);
+        liquidity_array.current_tick = tick;
+        liquidity_array.current_sqrt_price = tick_to_sqrt_price_u256(tick);
     };
 
     for position in positions {
@@ -62,33 +58,6 @@ pub fn create_full_liquidity_range(
             true,
         );
     }
-
-    // liquidity_array.data.retain(|tick_data| tick_data.is_initialized);
-
-    // // Save the liquidity array to a JSON file
-    // let json_data = json!({
-    //     "data": liquidity_array.data.iter().map(|tick_data| {
-    //         json!({
-    //             "tick": tick_data.tick,
-    //             "net_liquidity": tick_data.net_liquidity,
-    //             "is_initialized": tick_data.is_initialized,
-    //             "fee_growth_outside_a": tick_data.fee_growth_outside_a.to_string(),
-    //             "fee_growth_outside_b": tick_data.fee_growth_outside_b.to_string()
-    //         })
-    //     }).collect::<Vec<_>>(),
-    //     "current_tick": liquidity_array.current_tick,
-    //     "current_sqrt_price": liquidity_array.current_sqrt_price.to_string(),
-    //     "active_liquidity": liquidity_array.active_liquidity.to_string(),
-    //     "fee_growth_global_a": liquidity_array.fee_growth_global_a.to_string(),
-    //     "fee_growth_global_b": liquidity_array.fee_growth_global_b.to_string(),
-    //     "min_tick": liquidity_array.min_tick,
-    //     "fee_rate": liquidity_array.fee_rate,
-    //     "tick_spacing": liquidity_array.tick_spacing
-    // });
-
-    // let mut file = File::create("liquidity_data_3.json").map_err(|e| e)?;
-    // file.write_all(json_data.to_string().as_bytes())
-    //     .map_err(|e| e)?;
 
     // AFTER the whole liquidity distribution range is set up, we can set the essential caches.
     let (upper_tick_data, lower_tick_data) =
@@ -169,13 +138,6 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
                         .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
                     let is_sell = swap_data.token_in == pool_model.token_a_address;
-
-                    // println!("IS_SELL NOT REVERSED: {} {}", is_sell, swap_data.token_in);
-
-                    // println!("AMOUNT IN: {}", swap_data.amount_in);
-
-                    // println!("EXPECTED AMOUNT OUT: {}", swap_data.amount_out);
-                    // println!("SIG: {}", transaction.signature);
 
                     // Flip the is_sell for backwards sync and always pass in amount_out since we reversing each tx.
                     // For instance we have SOL -> POPCAT (aka sell) with amount_in being SOL. So now we are pasing POPCAT -> SOL and flip sell to buy. Both need reversion!

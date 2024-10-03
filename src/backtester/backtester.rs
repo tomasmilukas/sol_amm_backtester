@@ -151,16 +151,6 @@ impl Backtest {
                             .to_swap_data()
                             .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-                        // println!(
-                        //     "IS_SELL: {} {}",
-                        //     swap_data.token_in == self.wallet.token_a_addr,
-                        //     swap_data.token_in
-                        // );
-
-                        // println!("AMOUNT IN: {}", swap_data.amount_in);
-
-                        // println!("EXPECTED AMOUNT OUT: {}", swap_data.amount_out);
-
                         self.liquidity_arr.simulate_swap(
                             U256::from(swap_data.amount_in),
                             swap_data.token_in == self.wallet.token_a_addr,
@@ -210,14 +200,10 @@ impl Backtest {
                     let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
                     let position = self.liquidity_arr.remove_owners_position(&position_id)?;
 
-                    println!("CURRENT TICK: {}", self.liquidity_arr.current_tick);
-
                     println!("Fees in token_a: {}, fees in token_b: {}", fees_a, fees_b);
 
                     self.wallet.amount_a_fees_collected += fees_a;
                     self.wallet.amount_b_fees_collected += fees_b;
-
-                    println!("LIQ OF CLOSING POSITION: {}", position.liquidity);
 
                     let (amount_a, amount_b) = calculate_amounts(
                         U256::from(position.liquidity),
@@ -225,7 +211,6 @@ impl Backtest {
                         tick_to_sqrt_price_u256(position.lower_tick),
                         tick_to_sqrt_price_u256(position.upper_tick),
                     );
-                    println!("AMOUNTS FROM CLOSING POSITION: {} {}", amount_a, amount_b);
 
                     self.wallet.amount_token_a += amount_a + fees_a;
                     self.wallet.amount_token_b += amount_b + fees_b;
@@ -245,18 +230,8 @@ impl Backtest {
                     let lower_sqrt_price = tick_to_sqrt_price_u256(lower_tick);
                     let curr_sqrt_price = self.liquidity_arr.current_sqrt_price;
 
-                    println!("CURRENT TICK: {}", current_tick);
-
                     // Since the tick might be anywhere in between lower and upper provided ticks from env, we need to rebalance.
                     // The ratio nmr represents how much % of assets should be in token_a. If ratio is 0.3, then 30% should be in token a. Since token a is on upper side of liquidity.
-
-                    println!(
-                        "PRICES: {} {} {}",
-                        upper_sqrt_price, curr_sqrt_price, lower_sqrt_price
-                    );
-
-                    println!("TICKS: {} {} {}", upper_tick, current_tick, lower_tick);
-
                     let rebalance_ratio = if current_tick >= upper_tick {
                         // All liquidity is in token B.
                         0.0
@@ -267,27 +242,14 @@ impl Backtest {
                         ((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
                             / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64)
                     };
-                    println!("PASSED THIS?");
 
                     // No need to use decimals since when using raw token amounts as below it sorts itself out.
                     let current_price =
                         (curr_sqrt_price.as_u128() as f64 / Q64.as_u128() as f64).powf(2.0);
 
-                    println!(
-                        "PRICE: {} {} {} {}",
-                        current_price,
-                        curr_sqrt_price * curr_sqrt_price,
-                        Q128,
-                        Q128 / (curr_sqrt_price * curr_sqrt_price)
-                    );
-
                     let total_amount_a =
                         amount_a.as_u128() as f64 + amount_b.as_u128() as f64 / current_price;
                     let current_ratio = amount_a.as_u128() as f64 / total_amount_a;
-
-                    println!("RATIOS: {} {}", rebalance_ratio, current_ratio);
-                    println!("TOTAL AMOUNT A: {}", total_amount_a);
-                    // println!("TOTAL AMOUNT B: {}", amount_a * current_price + amount_b);
 
                     let mut latest_amount_a_in_wallet = amount_a;
                     let mut latest_amount_b_in_wallet = amount_b;
@@ -337,7 +299,6 @@ impl Backtest {
                                 curr_sqrt_price,
                                 upper_sqrt_price,
                             );
-                            println!("LIQ PASSED? 0");
 
                             calculate_token_b_from_liquidity(
                                 liquidity_a,
@@ -345,24 +306,15 @@ impl Backtest {
                                 lower_sqrt_price,
                             )
                         };
-                        println!("LIQ PASSED? 1 {} {}", amount_b, amount_b_needed_for_liq);
 
                         let amount_b_to_sell = amount_b - amount_b_needed_for_liq;
-                        println!("AMOUNT PASSED? 2");
 
                         let amount_out =
                             self.liquidity_arr.simulate_swap(amount_b_to_sell, false)?;
-                        println!("AMOUNT PASSED? 3");
 
                         latest_amount_a_in_wallet += amount_out;
                         latest_amount_b_in_wallet -= amount_b_to_sell;
-                        println!("WALLET UPDATES? 4");
                     }
-
-                    println!(
-                        "WALLET AMOUNTS: {} {}",
-                        latest_amount_a_in_wallet, latest_amount_b_in_wallet
-                    );
 
                     let newest_liquidity = calculate_liquidity(
                         latest_amount_a_in_wallet,
@@ -371,8 +323,6 @@ impl Backtest {
                         lower_sqrt_price,
                         upper_sqrt_price,
                     );
-
-                    println!("NEW LIQ: {}", newest_liquidity);
 
                     let (amount_a_provided_to_pool, amount_b_provided_to_pool) = calculate_amounts(
                         newest_liquidity,
