@@ -74,12 +74,6 @@ pub async fn calculate_prices_and_pnl(
         );
     let a_b_start_price = starting_amount_token_b / starting_amount_token_a;
 
-    println!("PRICES: {} {}", a_b_end_price, a_b_start_price);
-    println!(
-        "PRICES USD SOL: {} {}",
-        token_a_starting_price_usd, token_a_ending_price_usd
-    );
-
     // Real starting value in USD
     let starting_total_value_in_usd = starting_amount_token_a * token_a_starting_price_usd
         + starting_amount_token_b * token_b_starting_price_usd;
@@ -97,15 +91,6 @@ pub async fn calculate_prices_and_pnl(
         / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
     let token_b_end_amount = backtest.wallet.amount_token_b.as_u128() as f64
         / 10.0f64.powi(backtest.wallet.token_b_decimals as i32);
-
-    println!(
-        "STARTING AND ENDING AMOUNTS POPCAT: {} {}",
-        starting_amount_token_b, token_b_end_amount
-    );
-    println!(
-        "STARTING AND ENDING AMOUNTS SOL: {} {}",
-        starting_amount_token_a, token_a_end_amount
-    );
 
     // Final real ending value using wallet stuff
     let ending_total_value_in_usd = token_a_end_amount * token_a_ending_price_usd
@@ -131,31 +116,12 @@ pub async fn calculate_prices_and_pnl(
         / (starting_amount_token_a + starting_amount_token_b / a_b_start_price))
         * 100.0;
 
-    println!(
-        "CAPITAL EARNED: {} {} {}",
-        token_a_collected_fees, token_b_collected_fees, a_b_end_price
-    );
-
     let token_a_price_change_pct = ((token_a_ending_price_usd - token_a_starting_price_usd)
         / token_a_starting_price_usd)
         * 100.0;
     let token_b_price_change_pct = ((token_b_ending_price_usd - token_b_starting_price_usd)
         / token_b_starting_price_usd)
         * 100.0;
-
-    println!(
-        "STARTING TOTAL AMOUNTS {} {}",
-        starting_amount_token_a, starting_amount_token_b
-    );
-    println!(
-        "ENDING TOTAL AMOUNTS: {} {}",
-        token_a_end_amount, token_b_end_amount
-    );
-    println!(
-        "DIFF: {} {}",
-        token_a_end_amount - starting_amount_token_a,
-        token_b_end_amount - starting_amount_token_b
-    );
 
     Ok(PriceCalculationResult {
         start_time: highest_tx.block_time_utc,

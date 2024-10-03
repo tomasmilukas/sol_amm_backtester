@@ -283,8 +283,8 @@ pub fn decode_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
     // Skip the first 8 bytes (instruction discriminator)
     rdr.set_position(8);
 
-    // Read the position bump
-    let position_bump = rdr.read_u8()?;
+    // Skip the bumps (2 bytes)
+    rdr.set_position(rdr.position() + 2);
 
     // Read the tick indices
     let tick_lower_index = rdr.read_i32::<LittleEndian>()?;
