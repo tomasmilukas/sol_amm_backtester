@@ -5,6 +5,7 @@ use crate::{
     api::{price_api::PriceApi, token_metadata_api::TokenMetadataApi},
     backtester::backtester::Backtest,
     models::transactions_model::TransactionModelFromDB,
+    utils::core_math::Q64,
 };
 
 use super::core_math::Q128;
@@ -65,19 +66,31 @@ pub async fn calculate_prices_and_pnl(
     let starting_amount_token_b = (backtest.start_info.token_b_amount.as_u128() as f64)
         / 10.0f64.powi(backtest.wallet.token_b_decimals as i32);
 
-    let a_b_end_price = ((backtest.liquidity_arr.current_sqrt_price
-        * backtest.liquidity_arr.current_sqrt_price)
-        / Q128)
-        .as_u128() as f64;
+    let a_b_end_price = (backtest.liquidity_arr.current_sqrt_price.as_u128() as f64
+        / Q64.as_u128() as f64)
+        .powf(2.0)
+        * 10.0_f64.powf(
+            backtest.wallet.token_a_decimals as f64 - backtest.wallet.token_b_decimals as f64,
+        );
     let a_b_start_price = starting_amount_token_b / starting_amount_token_a;
 
     println!("PRICES: {} {}", a_b_end_price, a_b_start_price);
+    println!(
+        "PRICES USD SOL: {} {}",
+        token_a_starting_price_usd, token_a_ending_price_usd
+    );
 
+    // Real starting value in USD
     let starting_total_value_in_usd = starting_amount_token_a * token_a_starting_price_usd
         + starting_amount_token_b * token_b_starting_price_usd;
 
+    // Ending value in USD if position were held (you can see only prices changed)
     let start_amount_end_value_in_usd = starting_amount_token_a * token_a_ending_price_usd
         + starting_amount_token_b * token_b_ending_price_usd;
+
+    // PnL stats with no LP
+    let pnl_no_lping = start_amount_end_value_in_usd - starting_total_value_in_usd;
+    let pnl_no_lping_pct = (pnl_no_lping / starting_total_value_in_usd) * 100.0;
 
     // Fees already included when closing position in backtester.
     let token_a_end_amount = backtest.wallet.amount_token_a.as_u128() as f64
@@ -85,13 +98,21 @@ pub async fn calculate_prices_and_pnl(
     let token_b_end_amount = backtest.wallet.amount_token_b.as_u128() as f64
         / 10.0f64.powi(backtest.wallet.token_b_decimals as i32);
 
+    println!(
+        "STARTING AND ENDING AMOUNTS POPCAT: {} {}",
+        starting_amount_token_b, token_b_end_amount
+    );
+    println!(
+        "STARTING AND ENDING AMOUNTS SOL: {} {}",
+        starting_amount_token_a, token_a_end_amount
+    );
+
+    // Final real ending value using wallet stuff
     let ending_total_value_in_usd = token_a_end_amount * token_a_ending_price_usd
         + token_b_end_amount * token_b_ending_price_usd;
 
-    let pnl_no_lping = start_amount_end_value_in_usd - starting_total_value_in_usd;
-    let pnl_no_lping_pct = (pnl_no_lping / starting_total_value_in_usd) * 100.0;
-
     let final_value_total = ending_total_value_in_usd - starting_total_value_in_usd;
+    let total_pnl_pct = (final_value_total / starting_total_value_in_usd) * 100.0;
 
     let token_a_collected_fees = (backtest.wallet.amount_a_fees_collected.as_u128() as f64)
         / 10.0f64.powi(backtest.wallet.token_a_decimals as i32);
@@ -102,7 +123,6 @@ pub async fn calculate_prices_and_pnl(
     let total_fees_collected_in_usd = (token_a_collected_fees * token_a_ending_price_usd)
         + (token_b_collected_fees * token_b_ending_price_usd);
 
-    let total_pnl_pct = (final_value_total / starting_total_value_in_usd) * 100.0;
     let lping_profits_pct = (total_fees_collected_in_usd / starting_total_value_in_usd) * 100.0;
 
     let capital_earned_in_token_a = token_a_collected_fees + token_b_collected_fees / a_b_end_price;
@@ -110,6 +130,11 @@ pub async fn calculate_prices_and_pnl(
     let capital_earned_in_token_a_in_pct = (capital_earned_in_token_a
         / (starting_amount_token_a + starting_amount_token_b / a_b_start_price))
         * 100.0;
+
+    println!(
+        "CAPITAL EARNED: {} {} {}",
+        token_a_collected_fees, token_b_collected_fees, a_b_end_price
+    );
 
     let token_a_price_change_pct = ((token_a_ending_price_usd - token_a_starting_price_usd)
         / token_a_starting_price_usd)
