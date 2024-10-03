@@ -17,11 +17,6 @@ pub enum OrderDirection {
 
 #[async_trait]
 pub trait TransactionRepoTrait {
-    async fn fetch_highest_tx_swap(
-        &self,
-        pool_address: &str,
-    ) -> Result<Option<TransactionModelFromDB>>;
-
     async fn fetch_transactions(
         &self,
         pool_address: &str,
@@ -33,26 +28,27 @@ pub trait TransactionRepoTrait {
 
 #[async_trait]
 impl TransactionRepoTrait for TransactionRepo {
-    async fn fetch_highest_tx_swap(
-        &self,
-        pool_address: &str,
-    ) -> Result<Option<TransactionModelFromDB>> {
-        let result = sqlx::query(
-            r#"
-            SELECT * FROM transactions 
-            WHERE pool_address = $1 AND transaction_type = 'Swap'
-            ORDER BY block_time DESC, tx_id DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(pool_address)
-        .fetch_optional(&self.pool)
-        .await?;
+    // async fn fetch_highest_tx_swap(
+    //     &self,
+    //     pool_address: &str,
+    // ) -> Result<Option<TransactionModelFromDB>> {
+    //     // The most recent transaction is one that starts with tx_id 1 but is a swap
+    //     let result = sqlx::query(
+    //         r#"
+    //         SELECT * FROM transactions
+    //         WHERE pool_address = $1 AND transaction_type = 'Swap'
+    //         ORDER BY block_time DESC, tx_id DESC
+    //         LIMIT 1
+    //         "#,
+    //     )
+    //     .bind(pool_address)
+    //     .fetch_optional(&self.pool)
+    //     .await?;
 
-        result
-            .map(|row| self.row_to_transaction_model(&row))
-            .transpose()
-    }
+    //     result
+    //         .map(|row| self.row_to_transaction_model(&row))
+    //         .transpose()
+    // }
 
     async fn fetch_transactions(
         &self,
@@ -141,6 +137,28 @@ impl TransactionRepo {
         tx.commit().await?;
 
         Ok(inserted_count)
+    }
+
+    pub async fn fetch_most_recent_swap(
+        &self,
+        pool_address: &str,
+    ) -> Result<Option<TransactionModelFromDB>> {
+        // The most recent transaction is one that starts with tx_id 1 but is a swap
+        let result = sqlx::query(
+            r#"
+            SELECT * FROM transactions 
+            WHERE pool_address = $1 AND transaction_type = 'Swap'
+            ORDER BY block_time DESC, tx_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(pool_address)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        result
+            .map(|row| self.row_to_transaction_model(&row))
+            .transpose()
     }
 
     pub async fn upsert_liquidity_transactions(
@@ -290,7 +308,7 @@ impl TransactionRepo {
         self.row_to_transaction_model(&row)
     }
 
-    pub async fn get_closed_position_transactions_to_update(
+    pub async fn get_transactions_to_create_closed_positions(
         &self,
         pool_address: &str,
         last_tx_id: i64,
@@ -306,7 +324,7 @@ impl TransactionRepo {
                     tx_id > $1 
                     AND pool_address = $2
                     AND ready_for_backtesting = FALSE
-                    AND transaction_type = 'ClosePosition'
+                    AND transaction_type IN ('IncreaseLiquidity', 'DecreaseLiquidity', 'ClosePosition')
                 ORDER BY tx_id
                 LIMIT $3
             "#,

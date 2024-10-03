@@ -13,7 +13,8 @@ use crate::models::positions_model::{Position, PositionRewardInfo};
 pub const INCREASE_LIQUIDITY_DISCRIMINANT: &str = "3KLKPPgnNhb";
 pub const DECREASE_LIQUIDITY_DISCRIMINANT: &str = "8xY8jsAzTgX";
 pub const HAWKSIGHT_SWAP_DISCRIMINANT: &str = "59p8WydnSZt";
-pub const OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT: &str = "B3T3AnPs3Bbw";
+pub const OPEN_POSITION_WITH_METADATA_ORCA_STANDARD_DISCRIMINANT: &str = "B3T3AnPs3Bbw";
+pub const OPEN_POSITION_ORCA_STANDARD_DISCRIMINANT: &str = "2GrSomweg35m";
 pub const OPEN_POSITION_HAWKSIGHT_DISCRIMINANT: &str = "2GrSomweg35m";
 
 #[derive(Debug, PartialEq)]
@@ -217,6 +218,24 @@ pub fn find_encoded_inner_instruction(tx_data: &Value, discriminant: &str) -> Re
     Err(anyhow::anyhow!("Encoded inner instruction data not found"))
 }
 
+pub fn find_encoded_transaction_instruction(tx_data: &Value, discriminant: &str) -> Result<String> {
+    let instructions = tx_data["transaction"]["message"]["instructions"]
+        .as_array()
+        .ok_or_else(|| anyhow!("Instructions not found in transaction data"))?;
+
+    for instruction in instructions {
+        if let Some(data) = instruction["data"].as_str() {
+            if data.starts_with(discriminant) {
+                return Ok(data.to_string());
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Encoded instruction data not found for the given discriminant"
+    ))
+}
+
 pub fn decode_hawksight_swap_data(encoded_data: &str) -> Result<HawksightSwapData> {
     let data = bs58::decode(encoded_data).into_vec()?;
     let mut rdr = Cursor::new(data);
@@ -238,7 +257,7 @@ pub fn decode_hawksight_swap_data(encoded_data: &str) -> Result<HawksightSwapDat
     })
 }
 
-pub fn decode_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
+pub fn decode_open_position_with_metadata_data(encoded_data: &str) -> Result<(i32, i32)> {
     // Decode the Base58 string
     let data = bs58::decode(encoded_data).into_vec()?;
     let mut rdr = Cursor::new(data);
@@ -256,7 +275,7 @@ pub fn decode_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
     Ok((tick_lower_index, tick_upper_index))
 }
 
-pub fn decode_hawksight_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
+pub fn decode_open_position_data(encoded_data: &str) -> Result<(i32, i32)> {
     // Decode the Base58 string
     let data = bs58::decode(encoded_data).into_vec()?;
     let mut rdr = Cursor::new(data);
@@ -264,8 +283,8 @@ pub fn decode_hawksight_open_position_data(encoded_data: &str) -> Result<(i32, i
     // Skip the first 8 bytes (instruction discriminator)
     rdr.set_position(8);
 
-    // Read the position bump
-    let position_bump = rdr.read_u8()?;
+    // Skip the bumps (2 bytes)
+    rdr.set_position(rdr.position() + 2);
 
     // Read the tick indices
     let tick_lower_index = rdr.read_i32::<LittleEndian>()?;

@@ -7,6 +7,7 @@ use crate::models::transactions_model::{
 };
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_sync_amm_service::AMMService;
+use crate::utils::transaction_utils::retry_with_backoff;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
@@ -145,6 +146,13 @@ impl OrcaOptimizedAMM {
         let instructions = tx["instructions"].as_array()?;
 
         for instruction in instructions {
+            let is_right_whirlpool = instruction["payload"]["keyWhirlpool"].as_str() == Some(pool_address);
+
+            // skip transactions/swaps that dont involve our pool
+            if !is_right_whirlpool {
+                continue;
+            }
+
             if let Some(name) = instruction["name"].as_str() {
                 return match name {
                     "swap" | "swapV2" => {
@@ -175,7 +183,9 @@ impl OrcaOptimizedAMM {
                         transaction_type: "ClosePosition".to_string(),
                         ready_for_backtesting: false, // used for fetching openPositions
                         data: TransactionData::ClosePosition(ClosePositionData {
-                            position_address: instruction["payload"].as_object().unwrap()["keyPosition"].to_string(),
+                            position_address: instruction["payload"].as_object().unwrap()
+                                ["keyPosition"]
+                                .to_string(),
                         }),
                     }),
                     _ => None,
@@ -470,44 +480,55 @@ impl AMMService for OrcaOptimizedAMM {
         } else {
             yesterday
         };
-
+    
         let start_date = start_time.date_naive();
-
+    
         while current_date >= start_date {
             let current_datetime = DateTime::<Utc>::from_naive_utc_and_offset(
                 current_date.and_hms_opt(0, 0, 0).unwrap(),
                 Utc,
             );
             let cursor = Cursor::DateTime(current_datetime);
-
-            let transactions = self.fetch_transactions(pool_address, cursor).await?;
-
+    
+            let transactions = retry_with_backoff(
+                || self.fetch_transactions(pool_address, cursor.clone()),
+                3,
+                30000,  // 30 seconds minimum delay
+                200000   // 2 min maximum delay
+            ).await?;
+    
             if transactions.is_empty() {
                 println!(
                     "No transactions for {}. Moving to previous day.",
                     current_date
                 );
-
                 current_date = current_date
                     .pred_opt()
-                    .expect("Failed to get previous date"); // Move to previous day
-
+                    .expect("Failed to get previous date");
                 continue;
             }
-
+    
             println!("Processing transactions for {}", current_date);
-
-            let transaction_models =
-                self.convert_data_to_transactions_model(pool_address, transactions)?;
-
-            self.insert_transactions(transaction_models).await?;
-
+    
+            let transaction_models = self.convert_data_to_transactions_model(pool_address, transactions)?;
+    
+            retry_with_backoff(
+                || async {
+                    let mut sorted_models = transaction_models.clone();
+                    sorted_models.sort_by(|a, b| b.block_time.cmp(&a.block_time));
+                    self.insert_transactions(sorted_models).await
+                },
+                3,
+                30000,  // 30 seconds minimum delay
+                200000   // 2 min maximum delay
+            ).await?;
+    
             // Move to the previous day
             current_date = current_date
                 .pred_opt()
                 .expect("Failed to get previous date");
         }
-
+    
         println!("Reached or passed start_time {}. Exiting.", start_time);
         Ok(())
     }

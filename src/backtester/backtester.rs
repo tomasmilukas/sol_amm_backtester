@@ -4,11 +4,12 @@ use crate::{
     models::transactions_model::TransactionModelFromDB,
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
-        error::{BacktestError, SyncError},
-        price_calcs::{
-            calculate_amounts, calculate_liquidity, calculate_rebalance_amount,
-            tick_to_sqrt_price_u256, Q64, U256,
+        core_math::{
+            calculate_amounts, calculate_liquidity, calculate_liquidity_a, calculate_liquidity_b,
+            calculate_token_a_from_liquidity, calculate_token_b_from_liquidity,
+            tick_to_sqrt_price_u256, Q128, Q64, U256,
         },
+        error::{BacktestError, SyncError},
     },
 };
 
@@ -31,40 +32,17 @@ pub struct Wallet {
     // FEES CALCULATED SEPARATELY BUT ALSO ADDED DURING REBALANCING
     pub amount_a_fees_collected: U256,
     pub amount_b_fees_collected: U256,
-    pub total_profit: f64,
-    pub total_profit_pct: f64,
 }
 
+// The types of actions you can take as a user. For now, creating/closing uses your full wallet amounts. Later support can be added for custom amounts, also updating liquidity (increase/decrease) and so on.
 pub enum Action {
-    ProvideLiquidity {
-        position_id: i32,
-        liquidity_to_add: U256,
-    },
-    RemoveLiquidity {
-        position_id: i32,
-        liquidity_to_remove: U256,
-    },
-    Swap {
-        amount_in: U256,
-        is_sell: bool,
-    },
-    // Rebalance will take the OwnersPosition, remove the liquidity, swap to get 50/50 in token_a/token_b and then provide liquidity.
-    Rebalance {
+    ClosePosition {
         position_id: String,
-        rebalance_ratio: f64, // the rebalance ratio that we both want to sell at but also provide liquidity at. so if 0.6 the range will mean 60% in token_b and 40% token_a with a projection of token a increasing in price.
-        new_upper_tick: i32,
-        new_lower_tick: i32,
     },
     CreatePosition {
         position_id: String,
         lower_tick: i32,
         upper_tick: i32,
-        amount_a: U256,
-        amount_b: U256,
-    },
-    FinalizeStrategy {
-        position_id: String,
-        starting_sqrt_price: U256,
     },
 }
 
@@ -76,7 +54,7 @@ pub struct Backtest {
 }
 
 pub trait Strategy {
-    fn initialize_strategy(&self, amount_a: U256, amount_b: U256) -> Vec<Action>;
+    fn initialize_strategy(&self) -> Vec<Action>;
 
     fn update(
         &mut self,
@@ -84,7 +62,7 @@ pub trait Strategy {
         transaction: TransactionModelFromDB,
     ) -> Vec<Action>;
 
-    fn finalize_strategy(&self, starting_sqrt_price: U256) -> Vec<Action>;
+    fn finalize_strategy(&self) -> Vec<Action>;
 }
 
 impl Backtest {
@@ -114,12 +92,18 @@ impl Backtest {
         pool_address: &str,
         batch_size: i64,
     ) -> Result<(), SyncError> {
+        // Initialize the cursor with the start_tx_id
         let mut cursor = Some(start_tx_id);
-        let starting_price = self.liquidity_arr.current_sqrt_price;
 
-        while cursor.is_some() && cursor.unwrap() <= end_tx_id {
+        // Init strategy
+        let actions = self.strategy.initialize_strategy();
+
+        self.execute_actions(actions)
+            .map_err(|e| SyncError::Other(e.to_string()))?;
+
+        while cursor.is_some() && cursor.unwrap() >= end_tx_id {
             let transactions = transaction_repo
-                .fetch_transactions(pool_address, cursor, batch_size, OrderDirection::Ascending)
+                .fetch_transactions(pool_address, cursor, batch_size, OrderDirection::Descending)
                 .await
                 .map_err(|e| SyncError::DatabaseError(e.to_string()))?;
 
@@ -127,7 +111,8 @@ impl Backtest {
                 break;
             }
 
-            for transaction in transactions.iter() {
+            // Process transactions in reverse order (newest to oldest)
+            for transaction in transactions.iter().rev() {
                 match transaction.transaction_type.as_str() {
                     "IncreaseLiquidity" | "DecreaseLiquidity" => {
                         let liquidity_data = transaction
@@ -138,10 +123,25 @@ impl Backtest {
                         let is_increase =
                             transaction.transaction_type.as_str() == "IncreaseLiquidity";
 
+                        let (tick_lower, tick_upper, liquidity_amount) = match (
+                            liquidity_data.tick_lower,
+                            liquidity_data.tick_upper,
+                            liquidity_data.liquidity_amount.parse::<i128>(),
+                        ) {
+                            (Some(lower), Some(upper), Ok(amount)) => (lower, upper, amount),
+                            _ => {
+                                // eprintln!(
+                                //     "Liquidity transaction missing tick data, skipping: {}",
+                                //     transaction.signature
+                                // );
+                                continue;
+                            }
+                        };
+
                         self.liquidity_arr.update_liquidity(
-                            liquidity_data.tick_lower.unwrap(),
-                            liquidity_data.tick_upper.unwrap(),
-                            liquidity_data.liquidity_amount.parse::<u128>().unwrap() as i128,
+                            tick_lower,
+                            tick_upper,
+                            liquidity_amount,
                             is_increase,
                         );
                     }
@@ -164,230 +164,206 @@ impl Backtest {
                     .strategy
                     .update(&self.liquidity_arr, transaction.clone());
 
-                for action in actions {
-                    self.execute_action(action)
-                        .map_err(|e| SyncError::Other(e.to_string()))?;
-                }
+                self.execute_actions(actions)
+                    .map_err(|e| SyncError::Other(e.to_string()))?;
             }
 
-            cursor = transactions.last().map(|t| t.tx_id + 1);
+            // Update cursor for the next iteration
+            cursor = transactions.last().and_then(|t| {
+                if t.tx_id > end_tx_id {
+                    Some(t.tx_id - 1)
+                } else {
+                    None
+                }
+            });
 
-            if transactions.len() < batch_size as usize || cursor.unwrap() > end_tx_id {
+            if transactions.len() < batch_size as usize {
                 break;
             }
         }
 
-        self.strategy.finalize_strategy(starting_price);
+        let actions = self.strategy.finalize_strategy();
+
+        self.execute_actions(actions)
+            .map_err(|e| SyncError::Other(e.to_string()))?;
 
         Ok(())
     }
 
-    fn execute_action(&mut self, action: Action) -> Result<(), BacktestError> {
-        match action {
-            Action::ProvideLiquidity {
-                position_id,
-                liquidity_to_add,
-            } => {
-                todo!();
-            }
-            Action::RemoveLiquidity {
-                position_id,
-                liquidity_to_remove,
-            } => {
-                todo!();
-            }
-            Action::Swap { amount_in, is_sell } => {
-                self.liquidity_arr.simulate_swap(amount_in, is_sell)?;
+    fn execute_actions(&mut self, actions: Vec<Action>) -> Result<(), BacktestError> {
+        for action in actions {
+            match action {
+                Action::ClosePosition { position_id } => {
+                    println!("Closing position and collecting fees");
 
-                Ok(())
-            }
-            Action::Rebalance {
-                position_id,
-                rebalance_ratio,
-                new_lower_tick,
-                new_upper_tick,
-            } => {
-                let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
+                    // collect fees and remove position
+                    let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
+                    let position = self.liquidity_arr.remove_owners_position(&position_id)?;
 
-                self.wallet.amount_a_fees_collected = fees_a;
-                self.wallet.amount_b_fees_collected = fees_b;
+                    println!("Fees in token_a: {}, fees in token_b: {}", fees_a, fees_b);
 
-                let position = self.liquidity_arr.remove_owners_position(&position_id)?;
-
-                let (amount_a, amount_b) = calculate_amounts(
-                    U256::from(position.liquidity),
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(position.lower_tick),
-                    tick_to_sqrt_price_u256(position.upper_tick),
-                );
-                let mut amount_a_with_fees = amount_a + fees_a;
-                let mut amount_b_with_fees = amount_b + fees_b;
-
-                let (amount_to_sell, is_sell) = calculate_rebalance_amount(
-                    amount_a_with_fees,
-                    amount_b_with_fees,
-                    self.liquidity_arr.current_sqrt_price,
-                    U256::from((rebalance_ratio * Q64.as_u128() as f64) as u128),
-                );
-
-                // TODO: Optimize for small imbalances to avoid unnecessary swaps. Also add slippage later.
-                // For now, we'll proceed with the swap even for small amounts
-                let amount_out = self.liquidity_arr.simulate_swap(amount_to_sell, is_sell)?;
-
-                if is_sell {
-                    amount_a_with_fees -= amount_to_sell;
-                    amount_b_with_fees += amount_out;
                     self.wallet.amount_a_fees_collected += fees_a;
-                } else {
-                    amount_a_with_fees -= amount_to_sell;
-                    amount_b_with_fees += amount_out;
                     self.wallet.amount_b_fees_collected += fees_b;
+
+                    let (amount_a, amount_b) = calculate_amounts(
+                        U256::from(position.liquidity),
+                        self.liquidity_arr.current_sqrt_price,
+                        tick_to_sqrt_price_u256(position.lower_tick),
+                        tick_to_sqrt_price_u256(position.upper_tick),
+                    );
+
+                    self.wallet.amount_token_a += amount_a + fees_a;
+                    self.wallet.amount_token_b += amount_b + fees_b;
                 }
-
-                let new_liquidity = calculate_liquidity(
-                    amount_a_with_fees,
-                    amount_b_with_fees,
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(new_lower_tick),
-                    tick_to_sqrt_price_u256(new_upper_tick),
-                );
-
-                // Re-provide liquidity with the rebalanced amounts
-                self.liquidity_arr.add_owners_position(
-                    OwnersPosition {
-                        owner: position.owner,
-                        lower_tick: new_lower_tick,
-                        upper_tick: new_upper_tick,
-                        liquidity: new_liquidity.as_u128() as i128,
-                        fee_growth_inside_a_last: U256::zero(),
-                        fee_growth_inside_b_last: U256::zero(),
-                    },
-                    position_id.clone(),
-                );
-
-                // Log the rebalancing action
-                println!(
-                    "Rebalanced position {}: New liquidity: {}, Amount A: {}, Amount B: {}",
-                    position_id, new_liquidity, amount_a_with_fees, amount_b_with_fees
-                );
-
-                Ok(())
-            }
-            Action::CreatePosition {
-                position_id,
-                lower_tick,
-                upper_tick,
-                amount_a,
-                amount_b,
-            } => {
-                if amount_a > self.wallet.amount_token_a {
-                    return Err(BacktestError::InsufficientBalance {
-                        requested: amount_a,
-                        available: self.wallet.amount_token_a,
-                        token: self.wallet.token_a_addr.clone(),
-                    });
-                }
-
-                if amount_b > self.wallet.amount_token_b {
-                    return Err(BacktestError::InsufficientBalance {
-                        requested: amount_b,
-                        available: self.wallet.amount_token_b,
-                        token: self.wallet.token_b_addr.clone(),
-                    });
-                }
-
-                let liquidity = calculate_liquidity(
-                    amount_a,
-                    amount_b,
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(lower_tick),
-                    tick_to_sqrt_price_u256(upper_tick),
-                );
-
-                self.liquidity_arr.add_owners_position(
-                    OwnersPosition {
-                        owner: String::from(""),
-                        lower_tick,
-                        upper_tick,
-                        liquidity: liquidity.as_u128() as i128,
-                        fee_growth_inside_a_last: U256::zero(),
-                        fee_growth_inside_b_last: U256::zero(),
-                    },
+                Action::CreatePosition {
                     position_id,
-                );
+                    lower_tick,
+                    upper_tick,
+                } => {
+                    println!("Creating position before forward syncing.");
 
-                self.wallet.amount_token_a -= amount_a;
-                self.wallet.amount_token_b -= amount_b;
+                    let amount_a = self.wallet.amount_token_a;
+                    let amount_b = self.wallet.amount_token_b;
 
-                Ok(())
-            }
-            Action::FinalizeStrategy {
-                position_id,
-                starting_sqrt_price,
-            } => {
-                let (fees_a, fees_b) = self.liquidity_arr.collect_fees(&position_id)?;
-                let position = self.liquidity_arr.remove_owners_position(&position_id)?;
+                    let current_tick = self.liquidity_arr.current_tick;
+                    let upper_sqrt_price = tick_to_sqrt_price_u256(upper_tick);
+                    let lower_sqrt_price = tick_to_sqrt_price_u256(lower_tick);
+                    let curr_sqrt_price = self.liquidity_arr.current_sqrt_price;
 
-                self.wallet.amount_a_fees_collected += fees_a;
-                self.wallet.amount_b_fees_collected += fees_b;
+                    // Since the tick might be anywhere in between lower and upper provided ticks from env, we need to rebalance.
+                    // The ratio nmr represents how much % of assets should be in token_a. If ratio is 0.3, then 30% should be in token a. Since token a is on upper side of liquidity.
+                    let rebalance_ratio = if current_tick >= upper_tick {
+                        // All liquidity is in token B.
+                        0.0
+                    } else if current_tick <= lower_tick {
+                        // All liquidity is in token A.
+                        1.0
+                    } else {
+                        ((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
+                            / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64)
+                    };
 
-                let (amount_a, amount_b) = calculate_amounts(
-                    U256::from(position.liquidity),
-                    self.liquidity_arr.current_sqrt_price,
-                    tick_to_sqrt_price_u256(position.lower_tick),
-                    tick_to_sqrt_price_u256(position.upper_tick),
-                );
+                    // No need to use decimals since when using raw token amounts as below it sorts itself out.
+                    let current_price =
+                        (curr_sqrt_price.as_u128() as f64 / Q64.as_u128() as f64).powf(2.0);
 
-                self.wallet.amount_token_a += amount_a;
-                self.wallet.amount_token_b += amount_b;
+                    let total_amount_a =
+                        amount_a.as_u128() as f64 + amount_b.as_u128() as f64 / current_price;
+                    let current_ratio = amount_a.as_u128() as f64 / total_amount_a;
 
-                // Calculate initial value in terms of token A
-                let initial_price = (starting_sqrt_price * starting_sqrt_price) / Q64;
-                let initial_value_a = self.start_info.token_a_amount
-                    + (self.start_info.token_b_amount * Q64) / initial_price;
+                    let mut latest_amount_a_in_wallet = amount_a;
+                    let mut latest_amount_b_in_wallet = amount_b;
 
-                // Calculate the final value in terms of token A
-                let current_price = (self.liquidity_arr.current_sqrt_price
-                    * self.liquidity_arr.current_sqrt_price)
-                    / Q64;
-                let final_value_a = (self.wallet.amount_token_a
-                    + self.wallet.amount_a_fees_collected)
-                    + ((self.wallet.amount_token_b + self.wallet.amount_b_fees_collected) * Q64)
-                        / current_price;
+                    // In case the amounts are very close, dont swap.
+                    let no_swap_tolerance = (current_ratio - rebalance_ratio).abs() < 1e-3;
 
-                // Calculate profit
-                let profit = final_value_a.saturating_sub(initial_value_a);
-                let loss = initial_value_a.saturating_sub(final_value_a);
+                    // If price is closer to upper limit, we mainly provide liquidity in B. Therefore we need to sell more token A if its below current ratio.
+                    if current_ratio > rebalance_ratio && !no_swap_tolerance {
+                        let hypothetical_amount_b =
+                            ((1.0 - rebalance_ratio) * total_amount_a) * current_price;
 
-                // Determine if it's a profit or loss
-                let is_profit = final_value_a > initial_value_a;
+                        let amount_a_needed_for_liquidity = if rebalance_ratio == 0.0 {
+                            // Manual amount_a set to avoid overflow errors
+                            // aka sell all amount a
+                            U256::zero()
+                        } else {
+                            let liquidity_b = calculate_liquidity_b(
+                                U256::from(hypothetical_amount_b as u128),
+                                lower_sqrt_price,
+                                curr_sqrt_price,
+                            );
 
-                // Calculate profit or loss as a float
-                let profit_or_loss = if is_profit {
-                    profit.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32)
-                } else {
-                    -(loss.as_u128() as f64 / 10f64.powi(self.wallet.token_a_decimals as i32))
-                };
+                            calculate_token_a_from_liquidity(
+                                liquidity_b,
+                                curr_sqrt_price,
+                                upper_sqrt_price,
+                            )
+                        };
 
-                // Calculate percentage
-                let profit_percentage = (profit_or_loss
-                    / (initial_value_a.as_u128() as f64
-                        / 10f64.powi(self.wallet.token_a_decimals as i32)))
-                    * 100.0;
+                        // sell whats unnecessary for liquidity
+                        let amount_a_to_sell = amount_a - amount_a_needed_for_liquidity;
 
-                // Store results
-                self.wallet.total_profit = profit_or_loss;
-                self.wallet.total_profit_pct = profit_percentage;
+                        let amount_out =
+                            self.liquidity_arr.simulate_swap(amount_a_to_sell, true)?;
 
-                println!("Strategy finalized:");
-                println!("Initial value (in token A): {}", initial_value_a);
-                println!("Final value (in token A): {}", final_value_a);
-                println!("Total profit: {} token A", self.wallet.total_profit);
-                println!("Total profit percentage: {}%", self.wallet.total_profit_pct);
+                        latest_amount_a_in_wallet -= amount_a_to_sell;
+                        latest_amount_b_in_wallet += amount_out;
+                    } else if !no_swap_tolerance {
+                        // we have too little amount a and so we need to sell B for A.
+                        let hypothetical_amount_a = rebalance_ratio * total_amount_a;
 
-                Ok(())
+                        let amount_b_needed_for_liq = if rebalance_ratio == 1.0 {
+                            // Manual amount_a set to avoid overflow errors
+                            // aka sell all amount b
+                            U256::zero()
+                        } else {
+                            let liquidity_a = calculate_liquidity_a(
+                                U256::from(hypothetical_amount_a as u128),
+                                curr_sqrt_price,
+                                upper_sqrt_price,
+                            );
+
+                            calculate_token_b_from_liquidity(
+                                liquidity_a,
+                                curr_sqrt_price,
+                                lower_sqrt_price,
+                            )
+                        };
+
+                        let amount_b_to_sell = amount_b - amount_b_needed_for_liq;
+
+                        let amount_out =
+                            self.liquidity_arr.simulate_swap(amount_b_to_sell, false)?;
+
+                        latest_amount_a_in_wallet += amount_out;
+                        latest_amount_b_in_wallet -= amount_b_to_sell;
+                    }
+
+                    let newest_liquidity = calculate_liquidity(
+                        latest_amount_a_in_wallet,
+                        latest_amount_b_in_wallet,
+                        curr_sqrt_price,
+                        lower_sqrt_price,
+                        upper_sqrt_price,
+                    );
+
+                    let (amount_a_provided_to_pool, amount_b_provided_to_pool) = calculate_amounts(
+                        newest_liquidity,
+                        curr_sqrt_price,
+                        lower_sqrt_price,
+                        upper_sqrt_price,
+                    );
+
+                    self.wallet.amount_token_a =
+                        latest_amount_a_in_wallet - amount_a_provided_to_pool;
+                    self.wallet.amount_token_b =
+                        latest_amount_b_in_wallet - amount_b_provided_to_pool;
+
+                    self.liquidity_arr.add_owners_position(
+                        OwnersPosition {
+                            owner: String::from(""),
+                            lower_tick,
+                            upper_tick,
+                            liquidity: newest_liquidity.as_u128() as i128,
+                            fee_growth_inside_a_last: U256::zero(),
+                            fee_growth_inside_b_last: U256::zero(),
+                        },
+                        position_id,
+                    );
+
+                    println!(
+                        "Created position with liquidity {}, amount_a LPed: {}, amount_b LPed: {}",
+                        newest_liquidity, amount_a_provided_to_pool, amount_b_provided_to_pool
+                    );
+                    println!(
+                        "Left in wallet - {} token A , {} token B",
+                        self.wallet.amount_token_a, self.wallet.amount_token_b
+                    );
+                }
             }
         }
+
+        Ok(())
     }
 }
 
@@ -400,7 +376,7 @@ mod tests {
     struct MockStrategy;
 
     impl Strategy for MockStrategy {
-        fn initialize_strategy(&self, _amount_a: U256, _amount_b: U256) -> Vec<Action> {
+        fn initialize_strategy(&self) -> Vec<Action> {
             vec![]
         }
 
@@ -412,7 +388,7 @@ mod tests {
             vec![]
         }
 
-        fn finalize_strategy(&self, _starting_sqrt_price: U256) -> Vec<Action> {
+        fn finalize_strategy(&self) -> Vec<Action> {
             vec![]
         }
     }
@@ -432,22 +408,23 @@ mod tests {
         ) -> Result<Vec<TransactionModelFromDB>, anyhow::Error> {
             Ok(self.transactions.lock().await.clone())
         }
-
-        async fn fetch_highest_tx_swap(
-            &self,
-            pool_address: &str,
-        ) -> Result<Option<TransactionModelFromDB>> {
-            Ok(None)
-        }
     }
 
-    fn create_test_liquidity_array() -> LiquidityArray {
-        LiquidityArray::new(-500_000, 500_000, 10, 500)
+    fn create_test_liquidity_array(current_tick: i32) -> LiquidityArray {
+        let mut liquidity_arr = LiquidityArray::new(-500_000, 500_000, 10, 500);
+
+        liquidity_arr.current_tick = current_tick;
+        liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
+
+        liquidity_arr.update_liquidity(-100_000, 100_000, 1_000_000_000, true);
+        liquidity_arr.update_liquidity(-200_000, 200_000, 1_000_000_000, true);
+
+        liquidity_arr
     }
 
     #[tokio::test]
     async fn test_backtest_initialization() {
-        let liquidity_arr = create_test_liquidity_array();
+        let liquidity_arr = create_test_liquidity_array(0);
 
         let starting_token_a_amount = U256::from(1000_u128 * 10_u128.pow(6));
         let starting_token_b_amount = U256::from(1000_u128 * 10_u128.pow(6));
@@ -461,8 +438,6 @@ mod tests {
             token_b_decimals: 6,
             amount_a_fees_collected: U256::zero(),
             amount_b_fees_collected: U256::zero(),
-            total_profit: 0.0,
-            total_profit_pct: 0.0,
         };
         let strategy = Box::new(MockStrategy);
 
@@ -485,169 +460,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_position() {
-        let liquidity_arr = create_test_liquidity_array();
-        let wallet = Wallet {
-            token_a_addr: "TokenA".to_string(),
-            token_b_addr: "TokenB".to_string(),
-            amount_token_a: U256::from(1_000_000_000),
-            amount_token_b: U256::from(1_000_000_000),
-            token_a_decimals: 6,
-            token_b_decimals: 6,
-            amount_a_fees_collected: U256::zero(),
-            amount_b_fees_collected: U256::zero(),
-            total_profit: 0.0,
-            total_profit_pct: 0.0,
-        };
-        let strategy = Box::new(MockStrategy);
-
-        let mut backtest = Backtest::new(
-            U256::from(1000),
-            U256::from(1000),
-            liquidity_arr,
-            wallet,
-            strategy,
-        );
-
-        let action = Action::CreatePosition {
-            position_id: "test_position".to_string(),
-            lower_tick: 900,
-            upper_tick: 1100,
-            amount_a: U256::from(500_000_000_u128),
-            amount_b: U256::from(500_000_000),
-        };
-
-        backtest.execute_action(action).unwrap();
-
-        assert_eq!(backtest.wallet.amount_token_a, U256::from(500_000_000));
-        assert_eq!(backtest.wallet.amount_token_b, U256::from(500_000_000));
-
-        assert!(backtest
-            .liquidity_arr
-            .positions
-            .contains_key("test_position"));
-    }
-
-    #[tokio::test]
-    async fn test_rebalance_action() {
-        let starting_amount_a = U256::from(100 * 10_i32.pow(6));
-        let starting_amount_b = U256::from(100 * 10_i32.pow(6));
-
-        let current_tick = 11;
-        let lower_tick = current_tick - 100;
-        let upper_tick = current_tick + 100;
-
-        let wallet = Wallet {
-            token_a_addr: "TokenA".to_string(),
-            token_b_addr: "TokenB".to_string(),
-            amount_token_a: starting_amount_a,
-            amount_token_b: starting_amount_b,
-            token_a_decimals: 6,
-            token_b_decimals: 6,
-            amount_a_fees_collected: U256::zero(),
-            amount_b_fees_collected: U256::zero(),
-            total_profit: 0.0,
-            total_profit_pct: 0.0,
-        };
-        let strategy = Box::new(MockStrategy);
-
-        let mut backtest = Backtest::new(
-            starting_amount_a,
-            starting_amount_b,
-            create_test_liquidity_array(),
-            wallet,
-            strategy,
-        );
-
-        backtest.liquidity_arr.current_tick = current_tick;
-        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
-
-        // have to create multiple positions since if we rebalance the only position that exists, errors happen.
-        backtest.liquidity_arr.update_liquidity(
-            lower_tick - 100,
-            upper_tick + 100,
-            calculate_liquidity(
-                starting_amount_a * 5,
-                starting_amount_b * 5,
-                tick_to_sqrt_price_u256(current_tick),
-                tick_to_sqrt_price_u256(lower_tick - 100),
-                tick_to_sqrt_price_u256(upper_tick + 100),
-            )
-            .as_u128() as i128,
-            true,
-        );
-
-        // Actions sequence
-        let all_actions = vec![
-            Action::CreatePosition {
-                position_id: "test_position".to_string(),
-                lower_tick,
-                upper_tick,
-                amount_a: starting_amount_a,
-                amount_b: starting_amount_b,
-            },
-            Action::Swap {
-                amount_in: U256::from(7_000_000),
-                is_sell: true,
-            },
-            Action::Swap {
-                amount_in: U256::from(10_000_000),
-                is_sell: false,
-            },
-            Action::Swap {
-                amount_in: U256::from(3_000_000),
-                is_sell: true,
-            },
-            Action::Rebalance {
-                position_id: "test_position".to_string(),
-                rebalance_ratio: 0.5,            // 50/50 ratio
-                new_lower_tick: lower_tick - 50, // Slightly wider range
-                new_upper_tick: upper_tick + 50,
-            },
-        ];
-
-        // Execute all actions
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
-
-        // Get the rebalanced position
-        let rebalanced_position = backtest
-            .liquidity_arr
-            .positions
-            .get("test_position")
-            .unwrap();
-
-        // Assertions
-        assert!(
-            rebalanced_position.lower_tick == lower_tick - 50,
-            "Lower tick should be updated"
-        );
-        assert!(
-            rebalanced_position.upper_tick == upper_tick + 50,
-            "Upper tick should be updated"
-        );
-
-        assert!(
-            backtest.wallet.amount_a_fees_collected > U256::zero(),
-            "Should have collected some fees for token A"
-        );
-        assert!(
-            backtest.wallet.amount_b_fees_collected > U256::zero(),
-            "Should have collected some fees for token B"
-        );
-
-        assert!(
-            backtest.wallet.amount_token_a == U256::zero(),
-            "Nothing left in wallet"
-        );
-        assert!(
-            backtest.wallet.amount_token_b == U256::zero(),
-            "Nothing left in wallet"
-        );
-    }
-
-    #[tokio::test]
     async fn test_finalize_strategy_in_range() {
         let starting_amount_a = U256::from(100 * 10_i32.pow(6));
         let starting_amount_b = U256::from(100 * 10_i32.pow(6));
@@ -665,52 +477,51 @@ mod tests {
             token_b_decimals: 6,
             amount_a_fees_collected: U256::zero(),
             amount_b_fees_collected: U256::zero(),
-            total_profit: 0.0,
-            total_profit_pct: 0.0,
         };
         let strategy = Box::new(MockStrategy);
 
         let mut backtest = Backtest::new(
             starting_amount_a,
             starting_amount_b,
-            create_test_liquidity_array(),
+            create_test_liquidity_array(current_tick),
             wallet,
             strategy,
         );
 
-        backtest.liquidity_arr.current_tick = current_tick;
-        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
-
-        // Simulate some swaps to accumulate fees
-        let all_actions = vec![
-            Action::CreatePosition {
+        backtest
+            .execute_actions(vec![Action::CreatePosition {
                 position_id: "test_position".to_string(),
                 lower_tick,
                 upper_tick,
-                amount_a: starting_amount_a,
-                amount_b: starting_amount_b,
-            },
-            Action::Swap {
-                amount_in: U256::from(7_000_000),
-                is_sell: true,
-            },
-            Action::Swap {
-                amount_in: U256::from(10_000_000_i128),
-                is_sell: false,
-            },
-            Action::Swap {
-                amount_in: U256::from(3_000_000),
-                is_sell: true,
-            },
-            Action::FinalizeStrategy {
-                position_id: "test_position".to_string(),
-                starting_sqrt_price: tick_to_sqrt_price_u256(current_tick), // pass the starting tick
-            },
-        ];
+            }])
+            .unwrap();
 
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
+        // manually set cached ticks
+        let (upper_tick_data, lower_tick_data) = backtest
+            .liquidity_arr
+            .get_upper_and_lower_ticks(current_tick, true)
+            .unwrap();
+
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(7_000_000), true);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(10_000_000_i128), false);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(3_000_000), true);
+
+        backtest
+            .execute_actions(vec![Action::ClosePosition {
+                position_id: "test_position".to_string(),
+            }])
+            .unwrap();
 
         // Assertions
         assert!(
@@ -720,14 +531,6 @@ mod tests {
         assert!(
             backtest.wallet.amount_b_fees_collected > U256::zero(),
             "Should have collected some fees for token B"
-        );
-        assert!(
-            backtest.wallet.total_profit > 0.0,
-            "Total profit should be positive"
-        );
-        assert!(
-            backtest.wallet.total_profit_pct > 0.0,
-            "Profit percentage should  be positive"
         );
     }
 
@@ -749,60 +552,43 @@ mod tests {
             token_b_decimals: 6,
             amount_a_fees_collected: U256::zero(),
             amount_b_fees_collected: U256::zero(),
-            total_profit: 0.0,
-            total_profit_pct: 0.0,
         };
         let strategy = Box::new(MockStrategy);
 
         let mut backtest = Backtest::new(
             starting_amount_a,
             starting_amount_b,
-            create_test_liquidity_array(),
+            create_test_liquidity_array(current_tick),
             wallet,
             strategy,
         );
 
-        backtest.liquidity_arr.current_tick = current_tick;
-        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
-
-        // have to create multiple positions for one to be out of range
-        // cant use add owners position since that has limited balance
-        backtest.liquidity_arr.update_liquidity(
-            lower_tick - 100,
-            upper_tick + 100,
-            calculate_liquidity(
-                starting_amount_a * 5,
-                starting_amount_b * 5,
-                tick_to_sqrt_price_u256(current_tick),
-                tick_to_sqrt_price_u256(lower_tick - 100),
-                tick_to_sqrt_price_u256(upper_tick + 100),
-            )
-            .as_u128() as i128,
-            true,
-        );
-
-        // Simulate some swaps to accumulate fees
-        let all_actions = vec![
-            Action::CreatePosition {
+        backtest
+            .execute_actions(vec![Action::CreatePosition {
                 position_id: "test_position".to_string(),
                 lower_tick,
                 upper_tick,
-                amount_a: starting_amount_a,
-                amount_b: starting_amount_b,
-            },
-            Action::Swap {
-                amount_in: U256::from(800_000_000_i128),
-                is_sell: false,
-            },
-            Action::FinalizeStrategy {
-                position_id: "test_position".to_string(),
-                starting_sqrt_price: tick_to_sqrt_price_u256(current_tick), // pass the starting tick
-            },
-        ];
+            }])
+            .unwrap();
 
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
+        // manually set cached ticks
+        let (upper_tick_data, lower_tick_data) = backtest
+            .liquidity_arr
+            .get_upper_and_lower_ticks(current_tick, true)
+            .unwrap();
+
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(8_000_000_000_000_i128), false);
+
+        backtest
+            .execute_actions(vec![Action::ClosePosition {
+                position_id: "test_position".to_string(),
+            }])
+            .unwrap();
 
         // Assertions
         assert!(
@@ -815,21 +601,12 @@ mod tests {
         );
 
         assert!(
-            backtest.wallet.amount_token_a == U256::zero(),
-            "Wiped out token a liquidity"
+            backtest.wallet.amount_token_a == U256::from(109935),
+            "Token A wiped out, this was remainder for when providing liq, since not all tokens get used up"
         );
         assert!(
             backtest.wallet.amount_token_b > starting_amount_b,
             "All liquidity in token B, above starting"
-        );
-
-        assert!(
-            backtest.wallet.total_profit > 0.0,
-            "Total profit should be positive"
-        );
-        assert!(
-            backtest.wallet.total_profit_pct > 0.0,
-            "Profit percentage should  be positive"
         );
     }
 
@@ -851,60 +628,43 @@ mod tests {
             token_b_decimals: 6,
             amount_a_fees_collected: U256::zero(),
             amount_b_fees_collected: U256::zero(),
-            total_profit: 0.0,
-            total_profit_pct: 0.0,
         };
         let strategy = Box::new(MockStrategy);
 
         let mut backtest = Backtest::new(
             starting_amount_a,
             starting_amount_b,
-            create_test_liquidity_array(),
+            create_test_liquidity_array(current_tick),
             wallet,
             strategy,
         );
 
-        backtest.liquidity_arr.current_tick = current_tick;
-        backtest.liquidity_arr.current_sqrt_price = tick_to_sqrt_price_u256(current_tick);
-
-        // have to create multiple positions for one to be out of range
-        // cant use add owners position since that has limited balance
-        backtest.liquidity_arr.update_liquidity(
-            lower_tick - 100,
-            upper_tick + 100,
-            calculate_liquidity(
-                starting_amount_a * 5,
-                starting_amount_b * 5,
-                tick_to_sqrt_price_u256(current_tick),
-                tick_to_sqrt_price_u256(lower_tick - 100),
-                tick_to_sqrt_price_u256(upper_tick + 100),
-            )
-            .as_u128() as i128,
-            true,
-        );
-
-        // Simulate some swaps to accumulate fees
-        let all_actions = vec![
-            Action::CreatePosition {
+        backtest
+            .execute_actions(vec![Action::CreatePosition {
                 position_id: "test_position".to_string(),
                 lower_tick,
                 upper_tick,
-                amount_a: starting_amount_a,
-                amount_b: starting_amount_b,
-            },
-            Action::Swap {
-                amount_in: U256::from(600_000_000_i128),
-                is_sell: true, // SELLING TOKEN A
-            },
-            Action::FinalizeStrategy {
-                position_id: "test_position".to_string(),
-                starting_sqrt_price: tick_to_sqrt_price_u256(current_tick), // pass the starting tick
-            },
-        ];
+            }])
+            .unwrap();
 
-        for action in all_actions {
-            backtest.execute_action(action).unwrap();
-        }
+        // manually set cached ticks
+        let (upper_tick_data, lower_tick_data) = backtest
+            .liquidity_arr
+            .get_upper_and_lower_ticks(current_tick, true)
+            .unwrap();
+
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+
+        let _ = backtest
+            .liquidity_arr
+            .simulate_swap(U256::from(8_000_000_000_000_i128), true);
+
+        backtest
+            .execute_actions(vec![Action::ClosePosition {
+                position_id: "test_position".to_string(),
+            }])
+            .unwrap();
 
         // Assertions
         assert!(
@@ -917,21 +677,12 @@ mod tests {
         );
 
         assert!(
-            backtest.wallet.amount_token_b == U256::zero(),
-            "Wiped out token B liquidity"
+            backtest.wallet.amount_token_b == U256::from(1),
+            "Wiped out token B liquidity, remainder from when providing liq"
         );
         assert!(
             backtest.wallet.amount_token_a > starting_amount_a,
             "All liquidity in token A, above starting"
-        );
-
-        assert!(
-            backtest.wallet.total_profit > 0.0,
-            "Total profit should be positive"
-        );
-        assert!(
-            backtest.wallet.total_profit_pct > 0.0,
-            "Profit percentage should  be positive"
         );
     }
 }
