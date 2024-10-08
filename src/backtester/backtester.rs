@@ -468,8 +468,6 @@ impl Backtest {
                         position_id.clone(),
                     );
 
-                    println!("ALL POSITIONS: {:?}", self.liquidity_arr.positions);
-
                     println!(
                         "Created position with liquidity {}, amount_a LPed: {}, amount_b LPed: {}, lower tick: {}, upper tick: {}",
                         newest_liquidity, amount_a_provided_to_pool, amount_b_provided_to_pool,lower_tick,upper_tick
