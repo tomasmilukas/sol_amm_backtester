@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::utils::{
     core_math::{calculate_amounts, calculate_new_sqrt_price, tick_to_sqrt_price_u256, Q128, U256},
-    error::LiquidityArrayError,
+    error::{LiquidityArrayError, PriceCalcError},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +30,7 @@ pub struct LiquidityArray {
     pub fee_rate: i16,
     pub tick_spacing: i32,
     pub current_tick: i32,
+    pub current_block_time: i64,
     // SQRT PRICE SCALED BY Q64. B/A. So in SOL/USDC pool it would be 150/1 = 150.
     pub current_sqrt_price: U256,
     pub cached_upper_initialized_tick: Option<TickData>,
@@ -73,6 +74,7 @@ impl LiquidityArray {
             fee_rate,
             tick_spacing,
             current_tick: 0,
+            current_block_time: 0,
             active_liquidity: U256::zero(),
             fee_growth_global_a: U256::zero(),
             fee_growth_global_b: U256::zero(),
@@ -154,6 +156,7 @@ impl LiquidityArray {
 
     // ALSO initializes/uninitializes ticks.
     // ONLY USED FOR LIQ TRANSACTIONS AND LIVE POSITIONS SET UP.
+    // Liquidity delta is always a positive number
     pub fn update_liquidity(
         &mut self,
         lower_tick: i32,
@@ -164,23 +167,60 @@ impl LiquidityArray {
         let lower_tick_index = self.get_index(lower_tick);
         let upper_tick_index = self.get_index(upper_tick);
 
-        // Convert liquidity_delta to a signed value
-        let signed_liquidity_delta = if is_increase {
-            liquidity_delta
-        } else {
-            -liquidity_delta
-        };
+        let lower_tick_was_uninitialized = self.data[lower_tick_index].net_liquidity == 0;
+        let upper_tick_was_uninitialized = self.data[upper_tick_index].net_liquidity == 0;
 
         // Update lower tick
-        self.data[lower_tick_index].net_liquidity += signed_liquidity_delta;
-        self.data[lower_tick_index].is_initialized = self.data[lower_tick_index].net_liquidity != 0;
+        // self.data[lower_tick_index].net_liquidity += signed_liquidity_delta;
+
+        if is_increase {
+            // Increase liquidity
+            self.data[lower_tick_index].net_liquidity += liquidity_delta;
+            self.data[upper_tick_index].net_liquidity -= liquidity_delta;
+        } else {
+            // Decrease liquidity
+            self.data[lower_tick_index].net_liquidity -= liquidity_delta;
+            self.data[upper_tick_index].net_liquidity += liquidity_delta;
+        }
+
+        let is_lower_tick_initialized = self.data[lower_tick_index].net_liquidity != 0;
+        let is_upper_tick_initialized = self.data[upper_tick_index].net_liquidity != 0;
+
+        if is_lower_tick_initialized && lower_tick_was_uninitialized {
+            self.data[lower_tick_index].is_initialized = true;
+
+            if lower_tick <= self.current_tick {
+                self.data[lower_tick_index].fee_growth_outside_a = self.fee_growth_global_a;
+                self.data[lower_tick_index].fee_growth_outside_b = self.fee_growth_global_b;
+            }
+        } else if !is_lower_tick_initialized {
+            self.data[lower_tick_index].is_initialized = false;
+        }
 
         // Update upper tick
-        self.data[upper_tick_index].net_liquidity -= signed_liquidity_delta;
-        self.data[upper_tick_index].is_initialized = self.data[upper_tick_index].net_liquidity != 0;
+        // self.data[upper_tick_index].net_liquidity -= signed_liquidity_delta;
+
+        if is_upper_tick_initialized && upper_tick_was_uninitialized {
+            self.data[upper_tick_index].is_initialized = true;
+
+            if upper_tick <= self.current_tick {
+                self.data[upper_tick_index].fee_growth_outside_a = self.fee_growth_global_a;
+                self.data[upper_tick_index].fee_growth_outside_b = self.fee_growth_global_b;
+            }
+        } else if !is_upper_tick_initialized {
+            self.data[upper_tick_index].is_initialized = false;
+        }
 
         // Update active liquidity if the current price is within the range
         let in_range = self.current_tick >= lower_tick && self.current_tick < upper_tick;
+
+        println!("UPDATING LIQ: {} {}", in_range, liquidity_delta);
+        println!(
+            "UPDATING LIQ 2: {} {} {}",
+            self.current_tick, lower_tick, upper_tick
+        );
+        println!("ACTIVE LIQ: {}", self.active_liquidity);
+
         if in_range {
             if is_increase {
                 self.active_liquidity = self
@@ -194,6 +234,8 @@ impl LiquidityArray {
                     .expect("Liquidity underflow");
             }
         }
+
+        println!("ACTIVE LIQ 2: {}", self.active_liquidity);
     }
 
     pub fn add_owners_position(&mut self, position: OwnersPosition, position_id: String) {
@@ -361,6 +403,9 @@ impl LiquidityArray {
             let step_fee = (step_amount * self.fee_rate) / 1_000_000;
             let step_amount_net = step_amount - step_fee;
 
+            println!("STEP AMOUNT NET: {}", step_amount_net);
+            println!("REMAINING AMOUNT: {}", remaining_amount);
+
             if !crossing_tick {
                 let old_sqrt_price = current_sqrt_price;
                 let new_sqrt_price = calculate_new_sqrt_price(
@@ -385,10 +430,18 @@ impl LiquidityArray {
 
                 if is_sell {
                     amount_out += new_amount_b.abs_diff(old_amount_b);
-                    self.fee_growth_global_a += (step_fee * Q128) / liquidity;
+                    self.fee_growth_global_a += step_fee
+                        .checked_mul(Q128)
+                        .unwrap()
+                        .checked_div(liquidity)
+                        .unwrap();
                 } else {
                     amount_out += new_amount_a.abs_diff(old_amount_a);
-                    self.fee_growth_global_b += (step_fee * Q128) / liquidity;
+                    self.fee_growth_global_b += step_fee
+                        .checked_mul(Q128)
+                        .unwrap()
+                        .checked_div(liquidity)
+                        .unwrap();
                 }
 
                 current_sqrt_price = new_sqrt_price;
@@ -396,20 +449,14 @@ impl LiquidityArray {
             } else {
                 // Swap will cross into the next tick
                 let mut relevant_tick: TickData;
-                let fee_growth = (step_fee * Q128) / liquidity;
+                let fee_growth = step_fee
+                    .checked_mul(Q128)
+                    .unwrap()
+                    .checked_div(liquidity)
+                    .unwrap();
 
                 if is_sell {
-                    current_tick = lower_initialized_tick_data.tick;
-                    current_sqrt_price = lower_sqrt_price;
-                    relevant_tick = lower_initialized_tick_data;
-
                     self.fee_growth_global_a += fee_growth;
-
-                    // Update fee growth outside for the crossed tick
-                    relevant_tick.fee_growth_outside_a =
-                        self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
-                    relevant_tick.fee_growth_outside_b =
-                        self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
                     let (_, amount_b) = calculate_amounts(
                         liquidity,
@@ -418,6 +465,23 @@ impl LiquidityArray {
                         current_sqrt_price,
                     );
                     amount_out += amount_b;
+
+                    // println!("AMOUNT B OUT: {}", amount_b);
+                    // println!("AMOUNT B OUT TOTAL: {}", amount_b);
+
+                    // println!("LIQ: {}", amount_b);
+
+                    // println!("PRICES: {} {}", current_sqrt_price, lower_sqrt_price);
+
+                    current_tick = lower_initialized_tick_data.tick;
+                    current_sqrt_price = lower_sqrt_price;
+                    relevant_tick = lower_initialized_tick_data;
+
+                    // Update fee growth outside for the crossed tick
+                    relevant_tick.fee_growth_outside_a =
+                        self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
+                    relevant_tick.fee_growth_outside_b =
+                        self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
                     if relevant_tick.net_liquidity > 0 {
                         self.active_liquidity -= U256::from(relevant_tick.net_liquidity as u128);
@@ -430,17 +494,7 @@ impl LiquidityArray {
                     self.cached_lower_initialized_tick =
                         Some(self.get_next_initialized_tick(current_tick, false)?);
                 } else {
-                    current_tick = upper_initialized_tick_data.tick;
-                    current_sqrt_price = upper_sqrt_price;
-                    relevant_tick = upper_initialized_tick_data;
-
                     self.fee_growth_global_b += fee_growth;
-
-                    // Update fee growth outside for the crossed tick
-                    relevant_tick.fee_growth_outside_a =
-                        self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
-                    relevant_tick.fee_growth_outside_b =
-                        self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
 
                     let (amount_a, _) = calculate_amounts(
                         liquidity,
@@ -450,12 +504,34 @@ impl LiquidityArray {
                     );
                     amount_out += amount_a;
 
+                    // println!("AMOUNT A OUT: {}", amount_a);
+                    // println!("AMOUNT A OUT TOTAL: {}", amount_out);
+
+                    current_tick = upper_initialized_tick_data.tick;
+                    current_sqrt_price = upper_sqrt_price;
+                    relevant_tick = upper_initialized_tick_data;
+
+                    println!("OVERFLOW 1");
+
+                    // Update fee growth outside for the crossed tick
+                    relevant_tick.fee_growth_outside_a =
+                        self.fee_growth_global_a - relevant_tick.fee_growth_outside_a;
+                    relevant_tick.fee_growth_outside_b =
+                        self.fee_growth_global_b - relevant_tick.fee_growth_outside_b;
+
+                    println!(
+                        "OVERFLOW 2: {} {} {:?}",
+                        relevant_tick.net_liquidity, self.active_liquidity, relevant_tick
+                    );
+
                     if relevant_tick.net_liquidity > 0 {
                         self.active_liquidity += U256::from(relevant_tick.net_liquidity as u128);
                     } else {
                         self.active_liquidity -=
                             U256::from(relevant_tick.net_liquidity.unsigned_abs());
                     }
+
+                    println!("OVERFLOW 3");
 
                     self.cached_upper_initialized_tick =
                         Some(self.get_next_initialized_tick(current_tick, true)?);
