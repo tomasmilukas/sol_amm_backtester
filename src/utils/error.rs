@@ -102,6 +102,7 @@ pub enum LiquidityArrayError {
     PositionNotFound(String),
     InitializedTickNotFound,
     InsufficientLiquidity,
+    FeeCalculationError,
     PriceCalculation(PriceCalcError),
 }
 
@@ -110,6 +111,9 @@ impl fmt::Display for LiquidityArrayError {
         match self {
             LiquidityArrayError::PositionNotFound(id) => write!(f, "Position not found: {}", id),
             LiquidityArrayError::InsufficientLiquidity => write!(f, "Insufficient liquidity"),
+            LiquidityArrayError::FeeCalculationError => {
+                write!(f, "Overflow/underflow fee calculation error")
+            }
             LiquidityArrayError::PriceCalculation(err) => write!(f, "{}", err),
             LiquidityArrayError::InitializedTickNotFound => {
                 write!(f, "Initialized tick not found")
@@ -125,6 +129,9 @@ impl From<LiquidityArrayError> for BacktestError {
         match error {
             LiquidityArrayError::PositionNotFound(id) => BacktestError::PositionNotFound(id),
             LiquidityArrayError::InsufficientLiquidity => BacktestError::InvalidLiquidity,
+            LiquidityArrayError::FeeCalculationError => {
+                BacktestError::Other("Fee Calculation Error".to_string())
+            }
             LiquidityArrayError::PriceCalculation(err) => {
                 BacktestError::PriceCalculationError(err.to_string())
             }

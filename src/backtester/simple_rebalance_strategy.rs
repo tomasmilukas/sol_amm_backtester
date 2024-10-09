@@ -41,14 +41,17 @@ impl Strategy for SimpleRebalanceStrategy {
 
                 if current_tick < self.current_lower_tick || current_tick > self.current_upper_tick
                 {
+                    self.current_lower_tick = current_tick - self.range / 2;
+                    self.current_upper_tick = current_tick + self.range / 2;
+
                     let actions = vec![
                         Action::ClosePosition {
                             position_id: String::from("simple_rebalance"),
                         },
                         Action::CreatePosition {
                             position_id: String::from("simple_rebalance"),
-                            lower_tick: current_tick - self.range / 2,
-                            upper_tick: current_tick + self.range / 2,
+                            lower_tick: self.current_lower_tick,
+                            upper_tick: self.current_upper_tick,
                         },
                     ];
 
