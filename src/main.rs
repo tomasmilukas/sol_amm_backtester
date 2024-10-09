@@ -225,18 +225,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     sync_forward_liq_arr.fee_growth_global_a = U256::zero();
     sync_forward_liq_arr.fee_growth_global_b = U256::zero();
 
-    // Update lower tick
-    if let Some(lower_tick) = &mut sync_forward_liq_arr.cached_lower_initialized_tick {
-        lower_tick.fee_growth_outside_a = U256::zero();
-        lower_tick.fee_growth_outside_b = U256::zero();
-    }
-
-    // Update upper tick
-    if let Some(upper_tick) = &mut sync_forward_liq_arr.cached_upper_initialized_tick {
-        upper_tick.fee_growth_outside_a = U256::zero();
-        upper_tick.fee_growth_outside_b = U256::zero();
-    }
-
     // Reset fee growth outside for all ticks
     for tick_data in sync_forward_liq_arr.data.iter_mut() {
         tick_data.fee_growth_outside_a = U256::zero();

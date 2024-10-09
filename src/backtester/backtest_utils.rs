@@ -63,8 +63,8 @@ pub fn create_full_liquidity_range(
     let (upper_tick_data, lower_tick_data) =
         liquidity_array.get_upper_and_lower_ticks(liquidity_array.current_tick, is_sell)?;
 
-    liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data);
-    liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data);
+    liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data.tick);
+    liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data.tick);
 
     Ok(liquidity_array)
 }
@@ -274,8 +274,8 @@ mod tests {
 
         let (upper_tick_data, lower_tick_data) =
         initial_liquidity_array.get_upper_and_lower_ticks(starting_tick, true).unwrap();
-        initial_liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data);
-        initial_liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data);
+        initial_liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data.tick);
+        initial_liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data.tick);
 
         let result_1 = sync_backwards(
             &mock_repo_1,
