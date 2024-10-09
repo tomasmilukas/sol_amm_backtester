@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::utils::{
     core_math::{calculate_amounts, calculate_new_sqrt_price, tick_to_sqrt_price_u256, Q128, U256},
-    error::{LiquidityArrayError, PriceCalcError},
+    error::LiquidityArrayError,
 };
 
 #[derive(Debug, Clone, Copy)]
