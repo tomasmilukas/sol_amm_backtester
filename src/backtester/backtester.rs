@@ -254,20 +254,9 @@ impl Backtest {
                         tick_to_sqrt_price_u256(position.lower_tick),
                         tick_to_sqrt_price_u256(position.upper_tick),
                     );
-                    println!(
-                        "AMOUNTS A: {} {} {}",
-                        self.wallet.amount_token_a, amount_a, fees_a
-                    );
-                    println!(
-                        "AMOUNTS B: {} {} {}",
-                        self.wallet.amount_token_b, amount_b, fees_b
-                    );
 
                     self.wallet.amount_token_a += amount_a + fees_a;
                     self.wallet.amount_token_b += amount_b + fees_b;
-
-                    println!("AMOUNTS A POST: {}", self.wallet.amount_token_a);
-                    println!("AMOUNTS B POST: {}", self.wallet.amount_token_b);
 
                     self.data_logger.log(json!({
                         "action": "ClosePosition",
@@ -325,20 +314,6 @@ impl Backtest {
 
                     // In case the amounts are very close, dont swap.
                     let no_swap_tolerance = (current_ratio - rebalance_ratio).abs() < 0.05;
-
-                    println!(
-                        "EXPERIMENTS: {} {} {}",
-                        tick_to_sqrt_price_u256(48624),
-                        tick_to_sqrt_price_u256(48574),
-                        tick_to_sqrt_price_u256(48560)
-                    );
-
-                    println!(
-                        "PRICES: {} {} {}",
-                        curr_sqrt_price, lower_sqrt_price, upper_sqrt_price
-                    );
-
-                    println!("PRE OVERFLOW: {} {}", current_ratio, rebalance_ratio);
 
                     // If price is closer to upper limit, we mainly provide liquidity in B. Therefore we need to sell more token A if its below current ratio.
                     if current_ratio > rebalance_ratio && !no_swap_tolerance {
@@ -407,15 +382,8 @@ impl Backtest {
                             amount_b - amount_b_needed_for_liq
                         };
 
-                        println!(
-                            "B TO SELL: {} {} {}",
-                            amount_b_to_sell, amount_b, amount_b_needed_for_liq
-                        );
-
                         let amount_out =
                             self.liquidity_arr.simulate_swap(amount_b_to_sell, false)?;
-
-                        println!("AMOUNT OUT: {}", amount_out);
 
                         let amount_out_after_slippage = (amount_out
                             * U256::from(1_000_000 - SLIPPAGE_FOR_SWAP))
@@ -424,11 +392,6 @@ impl Backtest {
                         latest_amount_a_in_wallet += amount_out_after_slippage;
                         latest_amount_b_in_wallet -= amount_b_to_sell;
                     }
-
-                    println!(
-                        "POST OVERFLOW: {} {} ",
-                        latest_amount_a_in_wallet, latest_amount_b_in_wallet
-                    );
 
                     let newest_liquidity = calculate_liquidity(
                         latest_amount_a_in_wallet,
@@ -631,8 +594,8 @@ mod tests {
             .get_upper_and_lower_ticks(current_tick, true)
             .unwrap();
 
-        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
-        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data.tick);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data.tick);
 
         let _ = backtest
             .liquidity_arr
@@ -706,8 +669,8 @@ mod tests {
             .get_upper_and_lower_ticks(current_tick, true)
             .unwrap();
 
-        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
-        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data.tick);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data.tick);
 
         let _ = backtest
             .liquidity_arr
@@ -782,8 +745,8 @@ mod tests {
             .get_upper_and_lower_ticks(current_tick, true)
             .unwrap();
 
-        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data);
-        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data);
+        backtest.liquidity_arr.cached_lower_initialized_tick = Some(lower_tick_data.tick);
+        backtest.liquidity_arr.cached_upper_initialized_tick = Some(upper_tick_data.tick);
 
         let _ = backtest
             .liquidity_arr
