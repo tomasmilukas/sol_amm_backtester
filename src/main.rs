@@ -33,6 +33,7 @@ use chrono::{Duration, Utc};
 use config::{AppConfig, StrategyType};
 
 use colored::*;
+use core::sync;
 use dotenv::dotenv;
 use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use services::{
@@ -218,6 +219,32 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
 
     println!("Sync backwards complete! Time to add position, sync forwards and calculate results!");
 
+    let mut sync_forward_liq_arr = original_starting_liquidity_arr.clone();
+
+    // since backward sync accrued fees, we need to reset all fee data
+    sync_forward_liq_arr.fee_growth_global_a = U256::zero();
+    sync_forward_liq_arr.fee_growth_global_b = U256::zero();
+
+    // Update lower tick
+    if let Some(lower_tick) = &mut sync_forward_liq_arr.cached_lower_initialized_tick {
+        lower_tick.fee_growth_outside_a = U256::zero();
+        lower_tick.fee_growth_outside_b = U256::zero();
+    }
+
+    // Update upper tick
+    if let Some(upper_tick) = &mut sync_forward_liq_arr.cached_upper_initialized_tick {
+        upper_tick.fee_growth_outside_a = U256::zero();
+        upper_tick.fee_growth_outside_b = U256::zero();
+    }
+
+    // Reset fee growth outside for all ticks
+    for tick_data in sync_forward_liq_arr.data.iter_mut() {
+        tick_data.fee_growth_outside_a = U256::zero();
+        tick_data.fee_growth_outside_b = U256::zero();
+    }
+
+    sync_forward_liq_arr.current_block_time = highest_tx.block_time;
+
     let token_a_amount: u128 = config.get_strategy_detail("token_a_amount")?;
     let token_b_amount: u128 = config.get_strategy_detail("token_b_amount")?;
 
@@ -255,7 +282,7 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
     let mut backtest = Backtest::new(
         amount_token_a,
         amount_token_b,
-        original_starting_liquidity_arr,
+        sync_forward_liq_arr,
         wallet,
         strategy,
     );
@@ -354,6 +381,11 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         "  Profits LPing in pct:              {}%",
         format!("{:.3}", result.lping_profits_pct).red()
     );
+
+    let _ = backtest
+        .data_logger
+        .export_to_json("simulation_results.json");
+    println!("\n Simulation actions and detailed results exported to simulation_results.json");
 
     Ok(())
 }
