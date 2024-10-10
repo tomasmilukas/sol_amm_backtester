@@ -1,4 +1,4 @@
-# CLMM backtester
+# Orca CLMM backtester
 
 Series of articles going in-depth into the codebase, architecture and code structure:
 1. [Data sync](https://substack.com/home/post/p-149385031)
