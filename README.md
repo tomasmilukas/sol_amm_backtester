@@ -13,7 +13,7 @@ Currently, it only supports Orca, but its modular so other platforms can be adde
 ### What does this project do?
 ✅ Syncs transaction and liquidity data from ORCA. <br>
 ✅ Accurately simulates the swaps and liquidity transactions to calculate fees and price movement. <br>
-✅ Allows you to create your own strategy on top of the backtester. Read article number 3 to create one of your own. <br>
+✅ Allows you to create your own strategy on top of the backtester. <br>
 ✅ You can test three template strategies: NO_REBALANCE, SIMPLE_REBALANCE, VOLATILITY_REBALANCE. <br>
 ✅ Supports every pool from ORCA, regardless of how long it existed. <br>
 
@@ -32,7 +32,7 @@ Afterwards for real testing run with TRUE optimisation flag, but beware it syncs
 
 ## Runnning the data sync:
 
-To be able to run the data sync, you must fill out the env. The data will be stored in a local postgres db, so you must set that up too. 
+To be able to run the data sync, you must fill out the env.
 
 **ALCHEMY_API_KEY** and **COINGECKO_API_KEY** are standard api keys you need to get and fill out. 
 
