@@ -22,6 +22,13 @@ Currently, it only supports Orca, but its modular so other platforms can be adde
 ❌ Synthetic data has not been added to simulate all price paths. You will only test real historical data. <br>
 ❌ It does not support hyper realistic simulation for MEV strategies. The math for pricing and liquidity calculations falls in the 0.0001% range, so minor discrepencies exist. <br>
 
+## Set up:
+
+To be able to use the project you must have [rust installed](https://www.rust-lang.org/tools/install) in your system and it would be helpful to have the [postgres app](https://postgresapp.com/) to startup a postgres db.
+
+Now you will first have to run the data sync which you can refer to below. But I recommend running with FALSE optimisation flag in env to sync maybe 100 transactions and then you can run the backtester. This will instantly show you results without syncing for a long time.
+
+Afterwards for real testing run with TRUE optimisation flag, but beware it syncs from previous days midnight, so there is going to be a data gap that you will need to fill the next day by running the sync again. But if you have a strong internet connection (50 MBps+ stable) you can run the TRUE flag and sync months of data in hours.
 
 ## Runnning the data sync:
 
