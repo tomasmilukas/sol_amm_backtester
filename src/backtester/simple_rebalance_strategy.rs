@@ -1,7 +1,7 @@
 use crate::models::transactions_model::TransactionModelFromDB;
 
 use super::{
-    backtester::{Action, Strategy},
+    backtester_core::{Action, Strategy},
     liquidity_array::LiquidityArray,
 };
 
@@ -70,5 +70,9 @@ impl Strategy for SimpleRebalanceStrategy {
         vec![Action::ClosePosition {
             position_id: String::from("simple_rebalance"),
         }]
+    }
+
+    fn get_ticks(&self) -> (i32, i32) {
+        return (self.current_lower_tick, self.current_upper_tick);
     }
 }

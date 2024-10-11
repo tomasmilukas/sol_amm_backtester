@@ -7,7 +7,10 @@ use crate::{
     },
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
-        core_math::{price_to_tick, tick_to_sqrt_price_u256, U256},
+        core_math::{
+            calculate_liquidity_a, calculate_liquidity_b, calculate_token_a_from_liquidity,
+            calculate_token_b_from_liquidity, price_to_tick, tick_to_sqrt_price_u256, U256,
+        },
         error::SyncError,
     },
 };
@@ -163,6 +166,76 @@ pub async fn sync_backwards<T: TransactionRepoTrait>(
     Ok((liquidity_array, highest_tx))
 }
 
+// Since the tick might be anywhere in between lower and upper provided ticks from env, we need to rebalance.
+// The ratio nmr represents how much % of assets should be in token_a. If ratio is 0.3, then 30% should be in token a. Since token a is on upper side of liquidity.
+pub fn calculate_rebalance_ratio(
+    curr_sqrt_price: U256,
+    upper_sqrt_price: U256,
+    lower_sqrt_price: U256,
+) -> f64 {
+    if curr_sqrt_price >= upper_sqrt_price {
+        // All liquidity is in token B.
+        0.0
+    } else if curr_sqrt_price <= lower_sqrt_price {
+        // All liquidity is in token A.
+        1.0
+    } else {
+        ((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
+            / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64)
+    }
+}
+
+pub fn calculate_amount_a_needed_for_liquidity(
+    rebalance_ratio: f64,
+    total_amount_a: f64,
+    current_price: f64,
+    lower_sqrt_price: U256,
+    curr_sqrt_price: U256,
+    upper_sqrt_price: U256,
+) -> U256 {
+    let hypothetical_amount_b = ((1.0 - rebalance_ratio) * total_amount_a) * current_price;
+
+    if rebalance_ratio == 0.0 {
+        // Manual amount_a set to avoid overflow errors
+        // aka sell all amount a
+        U256::zero()
+    } else {
+        let liquidity_b = calculate_liquidity_b(
+            U256::from(hypothetical_amount_b as u128),
+            lower_sqrt_price,
+            curr_sqrt_price,
+        );
+
+        calculate_token_a_from_liquidity(liquidity_b, curr_sqrt_price, upper_sqrt_price)
+    }
+}
+
+pub fn calculate_amount_b_needed_for_liquidity(
+    rebalance_ratio: f64,
+    total_amount_a: f64,
+    current_price: f64,
+    lower_sqrt_price: U256,
+    curr_sqrt_price: U256,
+    upper_sqrt_price: U256,
+) -> U256 {
+    // we have too little amount a and so we need to sell B for A.
+    let hypothetical_amount_a = rebalance_ratio * total_amount_a;
+
+    if rebalance_ratio == 1.0 {
+        // Manual amount_a set to avoid overflow errors
+        // aka sell all amount b
+        U256::zero()
+    } else {
+        let liquidity_a = calculate_liquidity_a(
+            U256::from(hypothetical_amount_a as u128),
+            curr_sqrt_price,
+            upper_sqrt_price,
+        );
+
+        calculate_token_b_from_liquidity(liquidity_a, curr_sqrt_price, lower_sqrt_price)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,8 +345,9 @@ mod tests {
             true,
         );
 
-        let (upper_tick_data, lower_tick_data) =
-        initial_liquidity_array.get_upper_and_lower_ticks(starting_tick, true).unwrap();
+        let (upper_tick_data, lower_tick_data) = initial_liquidity_array
+            .get_upper_and_lower_ticks(starting_tick, true)
+            .unwrap();
         initial_liquidity_array.cached_lower_initialized_tick = Some(lower_tick_data.tick);
         initial_liquidity_array.cached_upper_initialized_tick = Some(upper_tick_data.tick);
 

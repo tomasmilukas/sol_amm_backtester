@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use super::transactions_sync_amm_service::constants::ORCA_OPTIMIZED_PATH_BASE_URL;
 use super::transactions_sync_amm_service::Cursor;
 
+#[allow(dead_code)]
 pub struct OrcaOptimizedAMM {
     transaction_repo: TransactionRepo,
     transaction_api: TransactionApi,
@@ -423,7 +424,7 @@ impl OrcaOptimizedAMM {
     fn match_token_amounts(
         &self,
         vault_a: &str,
-        vault_b: &str,
+        _vault_b: &str,
         amount0: &str,
         amount1: &str,
     ) -> (u64, u64) {

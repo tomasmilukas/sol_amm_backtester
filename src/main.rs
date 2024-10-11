@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_variables, unused_imports, renamed_and_removed_lints)]
+
 mod api;
 mod backtester;
 mod config;
@@ -24,7 +26,7 @@ use api::{
 };
 use backtester::{
     backtest_utils::{create_full_liquidity_range, sync_backwards},
-    backtester::{Backtest, Strategy, Wallet},
+    backtester_core::{Backtest, Strategy, Wallet},
     no_rebalance_strategy::NoRebalanceStrategy,
     simple_rebalance_strategy::SimpleRebalanceStrategy,
 };
@@ -33,7 +35,6 @@ use chrono::{Duration, Utc};
 use config::{AppConfig, StrategyType};
 
 use colored::*;
-use core::sync;
 use dotenv::dotenv;
 use repositories::{positions_repo::PositionsRepo, transactions_repo::TransactionRepo};
 use services::{
@@ -92,7 +93,7 @@ async fn sync_data(config: &AppConfig, days: i64) -> Result<()> {
     let pool_service = PoolService::new(pool_repo.clone(), pool_api);
 
     match pool_service
-        .fetch_and_store_pool_data(&config.pool_address, platform.clone())
+        .fetch_and_store_pool_data(&config.pool_address, platform)
         .await
     {
         Ok(()) => println!("Pool data fetched and stored successfully"),
@@ -362,12 +363,28 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         format!("{:.3}", result.capital_earned_in_token_a_in_pct).red()
     );
     println!(
-        "  Profits LPing in USD:             ${}",
+        "  Fees in USD:                      ${}",
         format!("{:.3}", result.total_fees_collected_in_usd).red()
     );
     println!(
-        "  Profits LPing in pct:              {}%",
-        format!("{:.3}", result.lping_profits_pct).red()
+        "  Fees in pct:                       {}%",
+        format!("{:.3}", result.total_fees_in_pct).red()
+    );
+    println!(
+        "  Pct of swaps in position:          {:.1}%",
+        result.range_efficiency
+    );
+    println!(
+        "  Fee APR in pct:                    {:.2}%",
+        result.fee_apr_percentage
+    );
+    println!(
+        "  Impermanent loss in pct:          {:.2}%",
+        result.impermanent_loss
+    );
+    println!(
+        "  LVR in pct:                       {:.2}%",
+        result.lvr
     );
 
     let _ = backtest
