@@ -7,6 +7,7 @@ use crate::utils::decode::Pubkey;
 
 use super::token_metadata::TokenMetadata;
 
+#[allow(dead_code)]
 // Copied from Orcas source program
 #[derive(Debug)]
 pub struct Whirlpool {

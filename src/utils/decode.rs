@@ -48,7 +48,7 @@ impl Pubkey {
         Pubkey(bytes)
     }
 
-    pub fn to_base58(&self) -> String {
+    pub fn to_base58(self) -> String {
         bs58::encode(&self.0).into_string()
     }
 }

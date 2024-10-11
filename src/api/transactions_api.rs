@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use reqwest::{Response, StatusCode};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;

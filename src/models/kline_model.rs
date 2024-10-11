@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub struct KlineModel {
     pub open_time: i64,
     pub open: f64,
@@ -13,6 +14,7 @@ pub struct KlineModel {
 }
 
 impl KlineModel {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         open_time: i64,
         open: f64,

@@ -63,8 +63,8 @@ impl TransactionRepoTrait for TransactionRepo {
         };
 
         let cursor_condition = match (order, cursor) {
-            (OrderDirection::Descending, Some(c)) => "tx_id < $3",
-            (OrderDirection::Ascending, Some(c)) => "tx_id > $3",
+            (OrderDirection::Descending, Some(_c)) => "tx_id < $3",
+            (OrderDirection::Ascending, Some(_c)) => "tx_id > $3",
             (_, None) => "1=1", // No cursor, fetch from the beginning/end
         };
 

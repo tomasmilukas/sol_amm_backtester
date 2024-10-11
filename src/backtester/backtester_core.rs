@@ -1,17 +1,15 @@
-use std::{collections::HashMap, thread, time::Duration};
-
 use anyhow::Result;
 use serde_json::json;
 
 use crate::{
-    models::transactions_model::TransactionModelFromDB,
+    backtester::backtest_utils::{
+        calculate_amount_a_needed_for_liquidity, calculate_amount_b_needed_for_liquidity,
+        calculate_rebalance_ratio,
+    },
+    models::transactions_model::{SwapData, TransactionModelFromDB},
     repositories::transactions_repo::{OrderDirection, TransactionRepoTrait},
     utils::{
-        core_math::{
-            calculate_amounts, calculate_liquidity, calculate_liquidity_a, calculate_liquidity_b,
-            calculate_token_a_from_liquidity, calculate_token_b_from_liquidity,
-            tick_to_sqrt_price_u256, Q64, U256,
-        },
+        core_math::{calculate_amounts, calculate_liquidity, tick_to_sqrt_price_u256, Q64, U256},
         data_logger::DataLogger,
         error::{BacktestError, SyncError},
     },
@@ -25,9 +23,12 @@ pub struct StartInfo {
 }
 
 pub struct SwappingData {
-    pub current_swap_nmr: i32,
-    pub current_token_a_volume: u64,
-    pub current_token_b_volume: u64,
+    pub current_swap_nmr: u128,
+    pub current_token_a_volume: u128,
+    pub current_token_b_volume: u128,
+    pub swap_nmr_in_position: u128,
+    pub token_a_volume_in_position: u128,
+    pub token_b_volume_in_position: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -75,11 +76,12 @@ pub trait Strategy {
     ) -> Vec<Action>;
 
     fn finalize_strategy(&self) -> Vec<Action>;
+
+    fn get_ticks(&self) -> (i32, i32);
 }
 
 // both divided by 10^6
 const SLIPPAGE_FOR_SWAP: i32 = 10000;
-const SLIPPAGE_FOR_LP: i32 = 5000;
 
 impl Backtest {
     pub fn new(
@@ -102,6 +104,9 @@ impl Backtest {
                 current_swap_nmr: 0,
                 current_token_a_volume: 0,
                 current_token_b_volume: 0,
+                swap_nmr_in_position: 0,
+                token_a_volume_in_position: 0,
+                token_b_volume_in_position: 0,
             },
         }
     }
@@ -175,26 +180,7 @@ impl Backtest {
 
                         let is_sell = swap_data.token_in == self.wallet.token_a_addr;
 
-                        let token_a_volume = if is_sell {
-                            swap_data.amount_in
-                                / 10_i32.pow(self.wallet.token_a_decimals as u32) as u64
-                        } else {
-                            0
-                        };
-
-                        let token_b_volume = if is_sell {
-                            0
-                        } else {
-                            swap_data.amount_in
-                                / 10_i32.pow(self.wallet.token_b_decimals as u32) as u64
-                        };
-
-                        self.liquidity_arr.current_block_time = transaction.block_time;
-                        self.data.current_swap_nmr += 1;
-                        self.data.current_token_a_volume += token_a_volume;
-                        self.data.current_token_b_volume += token_b_volume;
-
-                        // thread::sleep(Duration::from_millis(20));
+                        self.save_data(transaction, swap_data, is_sell);
 
                         self.liquidity_arr
                             .simulate_swap(U256::from(swap_data.amount_in), is_sell)?;
@@ -233,6 +219,43 @@ impl Backtest {
         Ok(())
     }
 
+    // saving data for later analysis
+    fn save_data(
+        &mut self,
+        transaction: &TransactionModelFromDB,
+        swap_data: &SwapData,
+        is_sell: bool,
+    ) {
+        self.liquidity_arr.current_block_time = transaction.block_time;
+        self.data.current_swap_nmr += 1;
+
+        let token_a_volume = if is_sell {
+            swap_data.amount_in / 10_i32.pow(self.wallet.token_a_decimals as u32) as u64
+        } else {
+            0
+        };
+
+        let token_b_volume = if is_sell {
+            0
+        } else {
+            swap_data.amount_in / 10_i32.pow(self.wallet.token_b_decimals as u32) as u64
+        };
+
+        self.data.current_token_a_volume += token_a_volume as u128;
+        self.data.current_token_b_volume += token_b_volume as u128;
+
+        let (lower_tick, upper_tick) = self.strategy.get_ticks();
+
+        let within_position_range = self.liquidity_arr.current_tick >= lower_tick
+            && self.liquidity_arr.current_tick <= upper_tick;
+
+        if within_position_range {
+            self.data.swap_nmr_in_position += 1;
+            self.data.token_a_volume_in_position += token_a_volume as u128;
+            self.data.token_b_volume_in_position += token_b_volume as u128;
+        }
+    }
+
     fn execute_actions(&mut self, actions: Vec<Action>) -> Result<(), BacktestError> {
         for action in actions {
             match action {
@@ -258,23 +281,25 @@ impl Backtest {
                     self.wallet.amount_token_a += amount_a + fees_a;
                     self.wallet.amount_token_b += amount_b + fees_b;
 
-                    self.data_logger.log(json!({
-                        "action": "ClosePosition",
-                        "position_id": position_id,
-                        "lower_tick": position.lower_tick,
-                        "upper_tick": position.upper_tick,
-                        "current_tick": self.liquidity_arr.current_tick,
-                        "token_a_balance": self.wallet.amount_token_a.as_u128(),
-                        "token_b_balance": self.wallet.amount_token_b.as_u128(),
-                        "token_a_returned": amount_a.as_u128(),
-                        "token_b_returned": amount_b.as_u128(),
-                        "fees_a": fees_a.as_u128(),
-                        "fees_b": fees_b.as_u128(),
-                        "current_block_time": self.liquidity_arr.current_block_time,
-                        "current_swap_nmr": self.data.current_swap_nmr,
-                        "current_token_a_volume": self.data.current_token_a_volume,
-                        "current_token_b_volume": self.data.current_token_b_volume,
-                    }));
+                    self.data_logger.log_close_position(
+                        position_id,
+                        position.lower_tick,
+                        position.upper_tick,
+                        self.liquidity_arr.current_tick,
+                        self.wallet.amount_token_a.as_u128(),
+                        self.wallet.amount_token_b.as_u128(),
+                        amount_a.as_u128(),
+                        amount_b.as_u128(),
+                        fees_a.as_u128(),
+                        fees_b.as_u128(),
+                        self.liquidity_arr.current_block_time as u128,
+                        self.data.current_swap_nmr,
+                        self.data.current_token_a_volume,
+                        self.data.current_token_b_volume,
+                        self.data.swap_nmr_in_position,
+                        self.data.token_a_volume_in_position,
+                        self.data.token_b_volume_in_position,
+                    );
                 }
                 Action::CreatePosition {
                     position_id,
@@ -288,18 +313,11 @@ impl Backtest {
                     let lower_sqrt_price = tick_to_sqrt_price_u256(lower_tick);
                     let curr_sqrt_price = self.liquidity_arr.current_sqrt_price;
 
-                    // Since the tick might be anywhere in between lower and upper provided ticks from env, we need to rebalance.
-                    // The ratio nmr represents how much % of assets should be in token_a. If ratio is 0.3, then 30% should be in token a. Since token a is on upper side of liquidity.
-                    let rebalance_ratio = if curr_sqrt_price >= upper_sqrt_price {
-                        // All liquidity is in token B.
-                        0.0
-                    } else if curr_sqrt_price <= lower_sqrt_price {
-                        // All liquidity is in token A.
-                        1.0
-                    } else {
-                        ((upper_sqrt_price - curr_sqrt_price).as_u128() as f64)
-                            / ((upper_sqrt_price - lower_sqrt_price).as_u128() as f64)
-                    };
+                    let rebalance_ratio = calculate_rebalance_ratio(
+                        curr_sqrt_price,
+                        upper_sqrt_price,
+                        lower_sqrt_price,
+                    );
 
                     // No need to use decimals since when using raw token amounts as below it sorts itself out.
                     let current_price =
@@ -317,26 +335,14 @@ impl Backtest {
 
                     // If price is closer to upper limit, we mainly provide liquidity in B. Therefore we need to sell more token A if its below current ratio.
                     if current_ratio > rebalance_ratio && !no_swap_tolerance {
-                        let hypothetical_amount_b =
-                            ((1.0 - rebalance_ratio) * total_amount_a) * current_price;
-
-                        let amount_a_needed_for_liquidity = if rebalance_ratio == 0.0 {
-                            // Manual amount_a set to avoid overflow errors
-                            // aka sell all amount a
-                            U256::zero()
-                        } else {
-                            let liquidity_b = calculate_liquidity_b(
-                                U256::from(hypothetical_amount_b as u128),
-                                lower_sqrt_price,
-                                curr_sqrt_price,
-                            );
-
-                            calculate_token_a_from_liquidity(
-                                liquidity_b,
-                                curr_sqrt_price,
-                                upper_sqrt_price,
-                            )
-                        };
+                        let amount_a_needed_for_liquidity = calculate_amount_a_needed_for_liquidity(
+                            rebalance_ratio,
+                            total_amount_a,
+                            current_price,
+                            lower_sqrt_price,
+                            curr_sqrt_price,
+                            upper_sqrt_price,
+                        );
 
                         // sell whats unnecessary for liquidity
                         let amount_a_to_sell = if amount_a_needed_for_liquidity >= amount_a {
@@ -355,26 +361,14 @@ impl Backtest {
                         latest_amount_a_in_wallet -= amount_a_to_sell;
                         latest_amount_b_in_wallet += amount_out_after_slippage;
                     } else if !no_swap_tolerance {
-                        // we have too little amount a and so we need to sell B for A.
-                        let hypothetical_amount_a = rebalance_ratio * total_amount_a;
-
-                        let amount_b_needed_for_liq = if rebalance_ratio == 1.0 {
-                            // Manual amount_a set to avoid overflow errors
-                            // aka sell all amount b
-                            U256::zero()
-                        } else {
-                            let liquidity_a = calculate_liquidity_a(
-                                U256::from(hypothetical_amount_a as u128),
-                                curr_sqrt_price,
-                                upper_sqrt_price,
-                            );
-
-                            calculate_token_b_from_liquidity(
-                                liquidity_a,
-                                curr_sqrt_price,
-                                lower_sqrt_price,
-                            )
-                        };
+                        let amount_b_needed_for_liq = calculate_amount_b_needed_for_liquidity(
+                            rebalance_ratio,
+                            total_amount_a,
+                            current_price,
+                            lower_sqrt_price,
+                            curr_sqrt_price,
+                            upper_sqrt_price,
+                        );
 
                         let amount_b_to_sell = if amount_b_needed_for_liq >= amount_b {
                             amount_b
@@ -434,23 +428,22 @@ impl Backtest {
                         self.wallet.amount_token_a, self.wallet.amount_token_b
                     );
 
-                    self.data_logger.log(json!({
-                        "action": "CreatePosition",
-                        "position_id": position_id,
-                        "lower_tick": lower_tick,
-                        "upper_tick": upper_tick,
-                        "current_tick": self.liquidity_arr.current_tick,
-                        "token_a_balance": self.wallet.amount_token_a.as_u128(),
-                        "token_b_balance": self.wallet.amount_token_b.as_u128(),
-                        "token_a_lped": amount_a_provided_to_pool.as_u128(),
-                        "token_b_lped": amount_b_provided_to_pool.as_u128(),
-                        "liquidity_provided": newest_liquidity.as_u128(),
-                        "current_block_time": self.liquidity_arr.current_block_time,
-                        "current_swap_nmr": self.data.current_swap_nmr,
-                        "current_token_a_volume": self.data.current_token_a_volume,
-                        "current_token_b_volume": self.data.current_token_b_volume,
-                        "current_active_liquidity": self.liquidity_arr.active_liquidity.as_u128(),
-                    }));
+                    self.data_logger.log_create_position(
+                        position_id,
+                        lower_tick,
+                        upper_tick,
+                        self.liquidity_arr.current_tick,
+                        self.wallet.amount_token_a.as_u128(),
+                        self.wallet.amount_token_b.as_u128(),
+                        amount_a_provided_to_pool.as_u128(),
+                        amount_b_provided_to_pool.as_u128(),
+                        newest_liquidity.as_u128(),
+                        self.liquidity_arr.current_block_time as u128,
+                        self.data.current_swap_nmr,
+                        self.data.current_token_a_volume,
+                        self.data.current_token_b_volume,
+                        self.liquidity_arr.active_liquidity.as_u128(),
+                    );
                 }
             }
         }
@@ -482,6 +475,10 @@ mod tests {
 
         fn finalize_strategy(&self) -> Vec<Action> {
             vec![]
+        }
+
+        fn get_ticks(&self) -> (i32, i32) {
+            (0_i32, 0_i32)
         }
     }
 

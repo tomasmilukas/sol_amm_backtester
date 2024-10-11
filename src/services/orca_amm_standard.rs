@@ -5,8 +5,8 @@ use crate::models::transactions_model::{
 use crate::repositories::transactions_repo::TransactionRepo;
 use crate::services::transactions_sync_amm_service::{constants, AMMService};
 use crate::utils::decode::{
-    decode_increase_liquidity_data, find_encoded_instruction_data, DECREASE_LIQUIDITY_DISCRIMINANT,
-    INCREASE_LIQUIDITY_DISCRIMINANT,
+    decode_decrease_liquidity_data, decode_increase_liquidity_data, find_encoded_instruction_data,
+    DECREASE_LIQUIDITY_DISCRIMINANT, INCREASE_LIQUIDITY_DISCRIMINANT,
 };
 use crate::utils::hawksight_parsing_tx::{HawksightParser, PoolInfo};
 use crate::utils::transaction_utils::{extract_common_data, retry_with_backoff};
@@ -79,7 +79,7 @@ impl OrcaStandardAMM {
 
     async fn fetch_transactions_from_signatures(
         &self,
-        signatures: &Vec<String>,
+        signatures: &[String],
     ) -> Result<Vec<serde_json::Value>> {
         retry_with_backoff(
             || self.transaction_api.fetch_transaction_data(signatures),
@@ -213,7 +213,7 @@ impl OrcaStandardAMM {
                 "DecreaseLiquidity" | "DecreaseLiquidityV2" => {
                     let encoded_data =
                         find_encoded_instruction_data(tx_data, DECREASE_LIQUIDITY_DISCRIMINANT)?;
-                    let decoded = decode_increase_liquidity_data(&encoded_data)?;
+                    let decoded = decode_decrease_liquidity_data(&encoded_data)?;
 
                     TransactionData::DecreaseLiquidity(LiquidityData {
                         token_a: self.token_a_address.clone(),
@@ -331,11 +331,8 @@ impl AMMService for OrcaStandardAMM {
             }
         });
 
-        let all_relevant_transactions: Vec<Value> = join_all(futures)
-            .await
-            .into_iter()
-            .filter_map(|x| x)
-            .collect();
+        let all_relevant_transactions: Vec<Value> =
+            join_all(futures).await.into_iter().flatten().collect();
 
         println!(
             "Processed {} relevant transactions.",
@@ -376,7 +373,7 @@ impl AMMService for OrcaStandardAMM {
                         if let Ok(transaction_model) =
                             self.convert_swap_data(&transaction, pool_address)
                         {
-                            if let TransactionData::Swap(swap_data) = &transaction_model.data {
+                            if let TransactionData::Swap(_swap_data) = &transaction_model.data {
                                 transactions.push(transaction_model);
                             } else {
                                 // This block is technically unreachable bcos it will always be swap data.

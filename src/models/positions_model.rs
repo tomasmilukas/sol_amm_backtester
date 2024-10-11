@@ -21,6 +21,7 @@ pub struct ClosedPositionModel {
     pub position_created_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 // Below is for decoding.
 #[derive(Debug)]
 pub struct Position {
@@ -36,6 +37,7 @@ pub struct Position {
     pub reward_infos: [PositionRewardInfo; NUM_REWARDS],
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
 pub struct PositionRewardInfo {
     pub growth_inside_checkpoint: u128,

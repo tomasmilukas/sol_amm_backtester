@@ -81,8 +81,8 @@ impl TransactionsService {
                             }
                         }
                     }
-                    TransactionData::DecreaseLiquidity(data)
-                    | TransactionData::IncreaseLiquidity(data) => {
+                    TransactionData::DecreaseLiquidity(_data)
+                    | TransactionData::IncreaseLiquidity(_data) => {
                         // Use the to_liquidity_data method
                         match closed_position_tx.data.to_liquidity_data() {
                             Ok(liquidity_data) => liquidity_data

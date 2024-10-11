@@ -100,21 +100,35 @@ pub fn calculate_amounts(
     if current_sqrt_price_fixed <= lower_sqrt_price_fixed {
         // Price is at or below the lower bound
         // All liquidity is in token A
-        let amount_a = (liquidity * (upper_sqrt_price_fixed - lower_sqrt_price_fixed) * Q64)
-            / (lower_sqrt_price_fixed * upper_sqrt_price_fixed);
+        let amount_a = calculate_token_a_from_liquidity(
+            liquidity,
+            lower_sqrt_price_fixed,
+            upper_sqrt_price_fixed,
+        );
         (amount_a, U256::zero())
     } else if current_sqrt_price_fixed >= upper_sqrt_price_fixed {
         // Price is at or above the upper bound
         // All liquidity is in token B
-        let amount_b = liquidity * (upper_sqrt_price_fixed - lower_sqrt_price_fixed) / Q64;
+        let amount_b = calculate_token_b_from_liquidity(
+            liquidity,
+            upper_sqrt_price_fixed,
+            lower_sqrt_price_fixed,
+        );
         (U256::zero(), amount_b)
     } else {
         // Price is within the range
         // Liquidity is split between token A and B
-        let amount_a = liquidity * (upper_sqrt_price_fixed - current_sqrt_price_fixed) * Q64
-            / (current_sqrt_price_fixed * upper_sqrt_price_fixed);
+        let amount_a = calculate_token_a_from_liquidity(
+            liquidity,
+            current_sqrt_price_fixed,
+            upper_sqrt_price_fixed,
+        );
 
-        let amount_b = liquidity * (current_sqrt_price_fixed - lower_sqrt_price_fixed) / Q64;
+        let amount_b = calculate_token_b_from_liquidity(
+            liquidity,
+            current_sqrt_price_fixed,
+            lower_sqrt_price_fixed,
+        );
 
         (amount_a, amount_b)
     }
@@ -126,7 +140,7 @@ pub fn calculate_amounts(
 pub fn calculate_new_sqrt_price(
     current_sqrt_price: U256,
     liquidity: U256,
-    amount_in: U256, // Δx
+    amount_in: U256, 
     is_sell: bool,
 ) -> U256 {
     if is_sell {

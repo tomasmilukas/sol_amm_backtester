@@ -132,6 +132,7 @@ pub trait AMMService: Send + Sync {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_amm_service(
     platform: AMMPlatforms,
     transaction_repo: TransactionRepo,

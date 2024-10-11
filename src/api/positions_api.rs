@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
-use chrono::Utc;
 use serde_json::Value;
 
 use crate::{models::positions_model::LivePositionModel, utils::decode::decode_position};

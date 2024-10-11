@@ -11,6 +11,7 @@ use super::decode::{
 
 pub struct HawksightParser;
 
+#[allow(dead_code)]
 pub struct PoolInfo {
     pub address: String,
     pub token_a: String,
@@ -92,7 +93,7 @@ impl HawksightParser {
 
     fn extract_swap_from_logs(
         transaction: &Value,
-        log_messages: &Vec<Value>,
+        log_messages: &[Value],
         pool_info: &PoolInfo,
     ) -> Result<SwapData> {
         let encoded_data =
@@ -120,13 +121,13 @@ impl HawksightParser {
 
         // we check the path of a to b and calculate the correct amountin/amountout
         let (amount_in, amount_out) = if swap_data.a_to_b {
-            let amount_b = (swap_data.amount as u64 * price_numerator as u64)
+            let amount_b = (swap_data.amount as u64 * price_numerator)
                 / 10_u64.pow(pool_info.decimals_a as u32);
 
             (swap_data.amount as u64, amount_b)
         } else {
             let amount_a = (swap_data.amount as u64 * 10_u64.pow(pool_info.decimals_a as u32))
-                / price_numerator as u64;
+                / price_numerator;
 
             (swap_data.amount as u64, amount_a)
         };
