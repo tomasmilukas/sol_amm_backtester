@@ -3,12 +3,10 @@ use std::error::Error;
 
 use crate::{
     api::{price_api::PriceApi, token_metadata_api::TokenMetadataApi},
-    backtester::backtester::Backtest,
+    backtester::backtester_core::Backtest,
     models::transactions_model::TransactionModelFromDB,
     utils::core_math::Q64,
 };
-
-use super::core_math::Q128;
 
 pub struct PriceCalculationResult {
     pub start_time: DateTime<Utc>,
@@ -26,7 +24,11 @@ pub struct PriceCalculationResult {
     pub capital_earned_in_token_a: f64,
     pub capital_earned_in_token_a_in_pct: f64,
     pub total_fees_collected_in_usd: f64,
-    pub lping_profits_pct: f64,
+    pub total_fees_in_pct: f64,
+    pub range_efficiency: f64,
+    pub fee_apr_percentage: f64,
+    pub impermanent_loss: f64,
+    pub lvr: f64,
 }
 
 // Price calculations from start to show growth in strategy in USD.
@@ -108,7 +110,7 @@ pub async fn calculate_prices_and_pnl(
     let total_fees_collected_in_usd = (token_a_collected_fees * token_a_ending_price_usd)
         + (token_b_collected_fees * token_b_ending_price_usd);
 
-    let lping_profits_pct = (total_fees_collected_in_usd / starting_total_value_in_usd) * 100.0;
+    let total_fees_in_pct = (total_fees_collected_in_usd / starting_total_value_in_usd) * 100.0;
 
     let capital_earned_in_token_a = token_a_collected_fees + token_b_collected_fees / a_b_end_price;
 
@@ -122,6 +124,25 @@ pub async fn calculate_prices_and_pnl(
     let token_b_price_change_pct = ((token_b_ending_price_usd - token_b_starting_price_usd)
         / token_b_starting_price_usd)
         * 100.0;
+
+    // number of swaps within range
+    let range_efficiency =
+        (backtest.data.swap_nmr_in_position as f64 / backtest.data.current_swap_nmr as f64) * 100.0;
+
+    let days = (tx_to_sync_from.block_time_utc - highest_tx.block_time_utc).num_days() as f64;
+    let fee_apr = (total_fees_in_pct / 100.0 + 1.0).powf(365.0 / days) - 1.0;
+    let fee_apr_percentage = fee_apr * 100.0;
+
+    // impermanent loss
+    let price_ratio = a_b_end_price / a_b_start_price;
+    let impermanent_loss = (2.0 * (price_ratio.sqrt() / (1.0 + price_ratio)) - 1.0) * 100.0;
+
+    // Loss Vs Rebalance
+    let growth_factor = ((token_a_ending_price_usd / token_a_starting_price_usd)
+        * (token_b_ending_price_usd / token_b_starting_price_usd))
+        .sqrt();
+    let rebalanced_value = starting_total_value_in_usd * growth_factor;
+    let lvr = ((ending_total_value_in_usd / rebalanced_value) - 1.0) * 100.0;
 
     Ok(PriceCalculationResult {
         start_time: highest_tx.block_time_utc,
@@ -139,6 +160,10 @@ pub async fn calculate_prices_and_pnl(
         capital_earned_in_token_a,
         capital_earned_in_token_a_in_pct,
         total_fees_collected_in_usd,
-        lping_profits_pct,
+        total_fees_in_pct,
+        range_efficiency,
+        fee_apr_percentage,
+        impermanent_loss,
+        lvr,
     })
 }

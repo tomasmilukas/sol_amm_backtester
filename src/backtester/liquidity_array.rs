@@ -218,7 +218,7 @@ impl LiquidityArray {
 
         if flipped_lower_tick {
             self.data[lower_tick_index].is_initialized = true;
-            if tick_to_sqrt_price_u256(lower_tick) <= self.current_sqrt_price {
+            if lower_tick <= self.current_tick {
                 self.data[lower_tick_index].fee_growth_outside_a = self.fee_growth_global_a;
                 self.data[lower_tick_index].fee_growth_outside_b = self.fee_growth_global_b;
             }
@@ -234,7 +234,7 @@ impl LiquidityArray {
 
         if flipped_upper_tick {
             self.data[upper_tick_index].is_initialized = true;
-            if tick_to_sqrt_price_u256(upper_tick) <= self.current_sqrt_price {
+            if upper_tick <= self.current_tick {
                 self.data[upper_tick_index].fee_growth_outside_a = self.fee_growth_global_a;
                 self.data[upper_tick_index].fee_growth_outside_b = self.fee_growth_global_b;
             }
@@ -245,8 +245,7 @@ impl LiquidityArray {
         }
 
         // Update active liquidity if the current price is within the range
-        let in_range = self.current_sqrt_price >= tick_to_sqrt_price_u256(lower_tick)
-            && self.current_sqrt_price < tick_to_sqrt_price_u256(upper_tick);
+        let in_range = self.current_tick >= lower_tick && self.current_tick < upper_tick;
 
         if in_range {
             if is_increase {

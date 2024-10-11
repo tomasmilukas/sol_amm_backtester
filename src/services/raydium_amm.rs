@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use super::transactions_sync_amm_service::Cursor;
 
+#[allow(dead_code)]
 pub struct RaydiumAMM {
     transaction_repo: TransactionRepo,
     transaction_api: TransactionApi,
@@ -64,8 +65,8 @@ impl AMMService for RaydiumAMM {
 
     async fn fetch_transactions(
         &self,
-        pool_address: &str,
-        end_cursor: Cursor,
+        _pool_address: &str,
+        _end_cursor: Cursor,
     ) -> Result<Vec<Value>> {
         // Also dont forget to add notes for raydium tx conversions. Its fine to have some duplicate code for the fetching sigs and tx.
         // But the conversion will be completely different!
@@ -75,8 +76,8 @@ impl AMMService for RaydiumAMM {
 
     fn convert_data_to_transactions_model(
         &self,
-        pool_address: &str,
-        tx_data: Vec<Value>,
+        _pool_address: &str,
+        _tx_data: Vec<Value>,
     ) -> Result<Vec<TransactionModel>> {
         // Implement the conversion logic here
         // This is a placeholder and should be replaced with actual conversion logic
@@ -85,9 +86,9 @@ impl AMMService for RaydiumAMM {
 
     async fn fetch_and_insert_transactions(
         &self,
-        pool_address: &str,
-        start_time: DateTime<Utc>,
-        latest_db_transaction: Option<TransactionModel>,
+        _pool_address: &str,
+        _start_time: DateTime<Utc>,
+        _latest_db_transaction: Option<TransactionModel>,
     ) -> Result<()> {
         // Implement the conversion logic here
         // This is a placeholder and should be replaced with actual conversion logic

@@ -1,8 +1,6 @@
 use std::error::Error;
 use std::fmt;
 
-use super::core_math::U256;
-
 #[derive(Debug)]
 pub struct PriceCalcError(pub String);
 
@@ -54,41 +52,19 @@ impl From<PriceCalcError> for SyncError {
 
 #[derive(Debug)]
 pub enum BacktestError {
-    InsufficientBalance {
-        requested: U256,
-        available: U256,
-        token: String,
-    },
-    InvalidLiquidity,
     InitializedTickNotFound,
     PriceCalculationError(String),
     PositionNotFound(String),
-    StrategyError(String),
-    DatabaseError(String),
     Other(String),
 }
 
 impl fmt::Display for BacktestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BacktestError::InsufficientBalance {
-                requested,
-                available,
-                token,
-            } => write!(
-                f,
-                "Insufficient balance: Attempting to stake {} {}, but wallet only has {}",
-                requested, token, available
-            ),
-            BacktestError::InvalidLiquidity => {
-                write!(f, "Invalid liquidity: Calculated liquidity is zero")
-            }
             BacktestError::PriceCalculationError(msg) => {
                 write!(f, "Price calculation error: {}", msg)
             }
             BacktestError::PositionNotFound(id) => write!(f, "Position not found: {}", id),
-            BacktestError::StrategyError(msg) => write!(f, "Strategy error: {}", msg),
-            BacktestError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
             BacktestError::InitializedTickNotFound => write!(f, "Initialized tick not found."),
             BacktestError::Other(msg) => write!(f, "Unknown error: {}", msg),
         }
@@ -101,7 +77,6 @@ impl Error for BacktestError {}
 pub enum LiquidityArrayError {
     PositionNotFound(String),
     InitializedTickNotFound,
-    InsufficientLiquidity,
     FeeCalculationError,
     PriceCalculation(PriceCalcError),
 }
@@ -110,7 +85,6 @@ impl fmt::Display for LiquidityArrayError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             LiquidityArrayError::PositionNotFound(id) => write!(f, "Position not found: {}", id),
-            LiquidityArrayError::InsufficientLiquidity => write!(f, "Insufficient liquidity"),
             LiquidityArrayError::FeeCalculationError => {
                 write!(f, "Overflow/underflow fee calculation error")
             }
@@ -128,7 +102,6 @@ impl From<LiquidityArrayError> for BacktestError {
     fn from(error: LiquidityArrayError) -> Self {
         match error {
             LiquidityArrayError::PositionNotFound(id) => BacktestError::PositionNotFound(id),
-            LiquidityArrayError::InsufficientLiquidity => BacktestError::InvalidLiquidity,
             LiquidityArrayError::FeeCalculationError => {
                 BacktestError::Other("Fee Calculation Error".to_string())
             }

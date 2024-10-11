@@ -1,7 +1,7 @@
 use crate::models::transactions_model::TransactionModelFromDB;
 
 use super::{
-    backtester::{Action, Strategy},
+    backtester_core::{Action, Strategy},
     liquidity_array::LiquidityArray,
 };
 
@@ -30,8 +30,8 @@ impl Strategy for NoRebalanceStrategy {
 
     fn update(
         &mut self,
-        liquidity_array: &LiquidityArray,
-        transaction: TransactionModelFromDB,
+        _liquidity_array: &LiquidityArray,
+        _transaction: TransactionModelFromDB,
     ) -> Vec<Action> {
         vec![]
     }
@@ -40,5 +40,9 @@ impl Strategy for NoRebalanceStrategy {
         vec![Action::ClosePosition {
             position_id: String::from("no_rebalance"),
         }]
+    }
+
+    fn get_ticks(&self) -> (i32, i32) {
+        (self.lower_tick, self.upper_tick)
     }
 }

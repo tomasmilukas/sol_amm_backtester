@@ -8,6 +8,7 @@ pub struct PositionsRepo {
     db: Pool<Postgres>,
 }
 
+#[allow(dead_code)]
 #[derive(FromRow)]
 struct LivePositionRow {
     id: i32,
