@@ -2,7 +2,7 @@
 
 Series of articles going in-depth into the codebase, architecture and code structure:
 1. [Data sync](https://substack.com/home/post/p-149385031)
-2. Simulator logic (URL)
+2. [Simulator logic](https://substack.com/home/post/p-149664933)
 3. Creating strategies (URL)
 
 This README will cover on how to run the project and what it does high level. For details, read the substack articles.
