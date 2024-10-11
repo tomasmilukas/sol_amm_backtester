@@ -1,4 +1,5 @@
 # .gitignore
 .env
-/target/
+target/
 .DS_Store
+/target/
