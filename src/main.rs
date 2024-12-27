@@ -382,10 +382,6 @@ async fn run_backtest(config: &AppConfig) -> Result<()> {
         "  Impermanent loss in pct:          {:.2}%",
         result.impermanent_loss
     );
-    println!(
-        "  LVR in pct:                       {:.2}%",
-        result.lvr
-    );
 
     let _ = backtest
         .data_logger

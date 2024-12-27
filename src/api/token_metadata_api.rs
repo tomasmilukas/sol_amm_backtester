@@ -31,7 +31,9 @@ impl TokenMetadataApi {
         let mut symbol_map = HashMap::new();
 
         for token in response {
-            if let (Some(address), Some(symbol)) = (token["address"].as_str(), token["symbol"].as_str()) {
+            if let (Some(address), Some(symbol)) =
+                (token["address"].as_str(), token["symbol"].as_str())
+            {
                 symbol_map.insert(address.to_string(), symbol.to_string());
             }
         }
@@ -39,13 +41,20 @@ impl TokenMetadataApi {
         Ok(symbol_map)
     }
 
-    pub async fn get_token_symbols_for_addresses(&self, addresses: &[String]) -> Result<Vec<String>> {
+    pub async fn get_token_symbols_for_addresses(
+        &self,
+        addresses: &[String],
+    ) -> Result<Vec<String>> {
         let symbols = self.get_token_symbols().await?;
-        
-        addresses.iter().map(|address| {
-            symbols.get(address)
-                .cloned()
-                .ok_or_else(|| anyhow!("Token symbol not found for address: {}", address))
-        }).collect()
+
+        addresses
+            .iter()
+            .map(|address| {
+                symbols
+                    .get(address)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("Token symbol not found for address: {}", address))
+            })
+            .collect()
     }
 }

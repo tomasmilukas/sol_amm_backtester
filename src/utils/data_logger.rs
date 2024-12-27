@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::Write;
 
 #[derive(Clone)]
-enum FieldValue {
+pub enum FieldValue {
     String(String),
     Integer(i64),
     UnsignedInteger(u128),

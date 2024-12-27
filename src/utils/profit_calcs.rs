@@ -28,7 +28,6 @@ pub struct PriceCalculationResult {
     pub range_efficiency: f64,
     pub fee_apr_percentage: f64,
     pub impermanent_loss: f64,
-    pub lvr: f64,
 }
 
 // Price calculations from start to show growth in strategy in USD.
@@ -43,6 +42,14 @@ pub async fn calculate_prices_and_pnl(
     let token_a_addr = &backtest.wallet.token_a_addr;
     let token_b_addr = &backtest.wallet.token_b_addr;
     let token_addr_arr = [token_a_addr.clone(), token_b_addr.clone()];
+
+    println!(
+        "{} {}",
+        backtest.wallet.amount_token_a.as_u128() as f64
+            / 10.0f64.powi(backtest.wallet.token_a_decimals as i32),
+        backtest.wallet.amount_token_b.as_u128() as f64
+            / 10.0f64.powi(backtest.wallet.token_b_decimals as i32)
+    );
 
     let symbols = token_metadata_api
         .get_token_symbols_for_addresses(&token_addr_arr)
@@ -129,7 +136,8 @@ pub async fn calculate_prices_and_pnl(
     let range_efficiency =
         (backtest.data.swap_nmr_in_position as f64 / backtest.data.current_swap_nmr as f64) * 100.0;
 
-    let days = (tx_to_sync_from.block_time_utc - highest_tx.block_time_utc).num_days() as f64;
+    let days =
+        ((tx_to_sync_from.block_time_utc - highest_tx.block_time_utc).num_days() as f64).max(1.0);
     let fee_apr = (total_fees_in_pct / 100.0 + 1.0).powf(365.0 / days) - 1.0;
     let fee_apr_percentage = fee_apr * 100.0;
 
@@ -142,7 +150,6 @@ pub async fn calculate_prices_and_pnl(
         * (token_b_ending_price_usd / token_b_starting_price_usd))
         .sqrt();
     let rebalanced_value = starting_total_value_in_usd * growth_factor;
-    let lvr = ((ending_total_value_in_usd / rebalanced_value) - 1.0) * 100.0;
 
     Ok(PriceCalculationResult {
         start_time: highest_tx.block_time_utc,
@@ -164,6 +171,5 @@ pub async fn calculate_prices_and_pnl(
         range_efficiency,
         fee_apr_percentage,
         impermanent_loss,
-        lvr,
     })
 }
