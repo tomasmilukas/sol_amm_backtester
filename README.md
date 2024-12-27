@@ -30,6 +30,9 @@ Now you will first have to run the data sync which you can refer to below. But I
 
 Afterwards for real testing run with TRUE optimisation flag, but beware it syncs from previous days midnight, so there is going to be a data gap that you will need to fill the next day by running the sync again. But if you have a strong internet connection (50 MBps+ stable) you can run the TRUE flag and sync months of data in hours.
 
+Here is an example of a backtester results from syncing a couple of hours of transactions on SOL/USDC pool:
+![Strategy results](Strategy_results_example.png)
+
 ## Runnning the data sync:
 
 To be able to run the data sync, you must fill out the env.
